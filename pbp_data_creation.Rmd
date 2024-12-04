@@ -1,0 +1,556 @@
+---
+title: "pbp_data_creation"
+output: html_document
+date: "2024-12-04"
+---
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(nflverse)
+library(tidyr)
+library(purrr)
+library(zoo)
+library(car)
+library(progress)
+
+# Function to process a single year's data
+process_year <- function(year) {
+  message(paste("\nProcessing year:", year))
+  
+  message("Step 1/7: Loading data...")
+# Load injuries for current and previous year
+injuries_data <- load_injuries((year-2):year) %>%
+  mutate(injury_date = as.Date(date_modified))
+
+# Modified function to calculate days since last injury for a player
+calc_days_since_injury <- function(player_id, current_date) {
+  player_injuries <- injuries_data %>%
+    filter(gsis_id == player_id,
+           injury_date < current_date,
+           !is.na(injury_date)) %>%
+    arrange(desc(injury_date))
+  
+  if(nrow(player_injuries) > 0) {
+    return(as.numeric(difftime(current_date, player_injuries$injury_date[1], units = "days")))
+  }
+  return(NA)
+}
+
+# Modified function to get team injury counts including previous year
+get_team_injury_counts <- function(team, game_date) {
+  team_injuries <- injuries_data %>%
+    filter(team == team,
+           injury_date < game_date) %>%
+    group_by(practice_primary_injury) %>%
+    summarise(count = n(), .groups = 'drop') %>%
+    pivot_wider(
+      names_from = practice_primary_injury,
+      names_prefix = "injury_count_",
+      values_from = count,
+      values_fill = 0
+    )
+  return(team_injuries)
+}
+
+
+  
+  # Load play by play data and participation data for the year
+  play_year <- load_pbp(year)
+  participation_data <- load_participation(year) %>%
+    select(
+      nflverse_game_id,
+      play_id,
+      offense_formation,
+      offense_personnel,
+      defense_personnel,
+      defenders_in_box,
+      number_of_pass_rushers,
+      offense_players,
+      defense_players,
+      defense_man_zone_type,
+      defense_coverage_type
+    )
+  
+  # Load roster data for player information
+  roster_data <- load_rosters(year)
+  
+    message("Step 2/7: Processing weekly stats...")
+  # Calculate weekly run stats
+  weekly_run_stats <- play_year %>%
+    filter(play_type %in% c("pass", "run"), down %in% 1:3) %>%
+    group_by(posteam, week, down) %>%
+    summarize(
+      weekly_run_plays = sum(play_type == "run", na.rm = TRUE),
+      weekly_total_plays = n(),
+      .groups = 'drop'
+    ) %>%
+    arrange(posteam, week, down) %>%
+    group_by(posteam, down) %>%
+    mutate(
+      cum_run_plays = cumsum(weekly_run_plays),
+      cum_total_plays = cumsum(weekly_total_plays)
+    ) %>%
+    ungroup() %>%
+    pivot_wider(
+      id_cols = c(posteam, week),
+      names_from = down,
+      names_glue = "down{down}_{.value}",
+      values_from = c(cum_run_plays, cum_total_plays)
+    ) %>%
+    arrange(posteam, week)
+
+  # Calculate run percentages
+  run_pcts <- weekly_run_stats %>%
+    mutate(
+      down1_pct = round(100 * down1_cum_run_plays / down1_cum_total_plays, 1),
+      down2_pct = round(100 * down2_cum_run_plays / down2_cum_total_plays, 1),
+      down3_pct = round(100 * down3_cum_run_plays / down3_cum_total_plays, 1)
+    ) %>%
+    select(posteam, week, down1_pct, down2_pct, down3_pct)
+
+  # Calculate prep time
+  prep_time_df <- play_year %>%
+    select(game_id, game_date, posteam = home_team) %>%
+    distinct() %>%
+    bind_rows(
+      play_year %>%
+        select(game_id, game_date, posteam = away_team) %>%
+        distinct()
+    ) %>%
+    arrange(posteam, game_date) %>%
+    group_by(posteam) %>%
+    mutate(
+      last_game_date = lag(game_date),
+      prep_days = as.numeric(difftime(game_date, last_game_date, units = "days"))
+    ) %>%
+    ungroup()
+
+add_player_info <- function(df, players_data, player_col, prefix) {
+    if (!player_col %in% names(df)) {
+        return(df)
+    }
+    
+    new_cols <- c("full_name", "birth_date", "rookie_year", "draft_number", "jersey_number", "pff_id", 
+                "weight", "height", "position", "depth_chart_position")
+    
+    # Create NA columns
+    for(col in new_cols) {
+        new_col_name <- paste0(prefix, "_", col)
+        df[[new_col_name]] <- NA
+    }
+    
+    # Add injury history columns
+    df[[paste0(prefix, "_days_since_injury")]] <- NA
+    df[[paste0(prefix, "_last_injury_type")]] <- NA
+    df[[paste0(prefix, "_injury_count_1yr")]] <- NA
+    
+    # Get valid players
+    valid_players <- unique(df[[player_col]][!is.na(df[[player_col]])])
+    
+    if(length(valid_players) > 0) {
+        # Get player info and handle duplicates
+        players_info <- players_data %>%
+            filter(gsis_id %in% valid_players) %>%
+            group_by(gsis_id) %>%
+            slice_tail(n = 1) %>%
+            ungroup() %>%
+            select(gsis_id, all_of(new_cols))  # Using all_of() to be explicit
+        
+        # Update player information
+        for(i in 1:nrow(df)) {
+            if(!is.na(df[[player_col]][i])) {
+                player_id <- df[[player_col]][i]
+                current_date <- as.Date(df$game_date[i])  # Add explicit conversion
+                player_data <- players_info %>% filter(gsis_id == player_id)
+                
+                # Update basic player info
+                if(nrow(player_data) == 1) {
+                    for(col in new_cols) {
+                        if(!is.null(player_data[[col]])) {
+                            df[i, paste0(prefix, "_", col)] <- player_data[[col]][1]
+                        }
+                    }
+                }
+                
+                # Get player's injury history
+                player_injuries <- injuries_data %>%
+                    filter(gsis_id == player_id,
+                           injury_date < current_date,
+                           !is.na(injury_date)) %>%
+                    arrange(desc(injury_date))
+                
+                # Update injury info
+                if(nrow(player_injuries) > 0) {
+                    # Days since last injury
+                    df[i, paste0(prefix, "_days_since_injury")] <- 
+                        as.numeric(difftime(current_date, player_injuries$injury_date[1], units = "days"))
+                    
+                    # Last injury type
+                    df[i, paste0(prefix, "_last_injury_type")] <- 
+                        player_injuries$practice_primary_injury[1]
+                    
+                    # Count of injuries in past year
+                    one_year_ago <- current_date - 365
+                    df[i, paste0(prefix, "_injury_count_1yr")] <- 
+                        sum(player_injuries$injury_date >= one_year_ago)
+                }
+            }
+        }
+    }
+    return(df)
+}
+  message("Step 3/7: Processing third and fourth downs...")
+
+  # Process third downs
+  third_downs <- play_year %>%
+    filter(down == 3) %>%
+    select(
+      play_id,
+      game_id,
+      game_date,
+      posteam,
+      home_team,
+      away_team,
+      ydstogo,
+      yardline_100,
+      game_seconds_remaining,
+      posteam_timeouts_remaining,
+      defteam_timeouts_remaining,
+      posteam_score,
+      defteam_score,
+      play_type,
+      yards_gained,
+      first_down,
+      rush_attempt,
+      pass_attempt,
+      field_goal_attempt,
+      punt_attempt,
+      home_coach,
+      away_coach,
+      week,
+      roof,
+      temp, 
+      wind,
+      drive,
+      drive_start_transition,
+      posteam_type
+    ) %>%
+    mutate(
+      score_diff = posteam_score - defteam_score,
+      posteam_coach = ifelse(posteam == home_team, home_coach, away_coach),
+      season = year
+    ) %>%
+    filter(!field_goal_attempt, !punt_attempt, play_type %in% c("pass", "run")) %>%
+    mutate(converted = first_down) %>%
+    select(-first_down) %>%
+    left_join(participation_data, 
+              by = c("game_id" = "nflverse_game_id", "play_id" = "play_id")) %>%
+    separate(offense_players, 
+             into = paste0("offense_player_", 1:11), 
+             sep = ";", 
+             fill = "right") %>%
+    separate(defense_players, 
+             into = paste0("defense_player_", 1:11), 
+             sep = ";", 
+             fill = "right")
+
+  # Process fourth downs
+  fourth_downs <- play_year %>%
+    filter(down == 4) %>%
+    select(
+      play_id,
+      game_id,
+      game_date,
+      posteam,
+      home_team,
+      away_team,
+      ydstogo,
+      yardline_100,
+      game_seconds_remaining,
+      posteam_timeouts_remaining,
+      defteam_timeouts_remaining,
+      posteam_score,
+      defteam_score,
+      play_type,
+      yards_gained,
+      first_down,
+      rush_attempt,
+      pass_attempt,
+      field_goal_attempt,
+      punt_attempt,
+      home_coach,
+      away_coach,
+      week,
+      roof,
+      temp, 
+      wind,
+      drive,
+      drive_start_transition,
+      posteam_type
+    ) %>%
+    mutate(
+      score_diff = posteam_score - defteam_score,
+      posteam_coach = ifelse(posteam == home_team, home_coach, away_coach),
+      attempt = if_else(play_type %in% c("punt", "field_goal"), 0, 1),
+      minutes_remaining = game_seconds_remaining / 60,
+      qtr = ceiling(minutes_remaining / 15),
+      season = year
+    ) %>%
+    left_join(participation_data, 
+              by = c("game_id" = "nflverse_game_id", "play_id" = "play_id")) %>%
+    separate(offense_players, 
+             into = paste0("offense_player_", 1:11), 
+             sep = ";", 
+             fill = "right") %>%
+    separate(defense_players, 
+             into = paste0("defense_player_", 1:11), 
+             sep = ";", 
+             fill = "right")
+  
+  message("Step 4/7: Adding player information...")
+  # Add player information for both offensive and defensive players
+  for(i in 1:11) {
+    # Process offensive players
+    third_downs <- add_player_info(third_downs, 
+                                  roster_data, 
+                                  paste0("offense_player_", i), 
+                                  paste0("offense_player_", i))
+    fourth_downs <- add_player_info(fourth_downs, 
+                                   roster_data, 
+                                   paste0("offense_player_", i), 
+                                   paste0("offense_player_", i))
+    
+    # Process defensive players
+    third_downs <- add_player_info(third_downs, 
+                                  roster_data, 
+                                  paste0("defense_player_", i), 
+                                  paste0("defense_player_", i))
+    fourth_downs <- add_player_info(fourth_downs, 
+                                   roster_data, 
+                                   paste0("defense_player_", i), 
+                                   paste0("defense_player_", i))
+  }
+    message("Step 5/7: Processing team injury data...")
+    
+    # Add defteam and join with run percentages and prep time
+  third_downs <- third_downs %>%
+    mutate(defteam = ifelse(posteam == home_team, away_team, home_team)) %>%
+    left_join(run_pcts %>% 
+                mutate(join_week = week + 1) %>% 
+                select(-week), 
+              by = c("posteam", "week" = "join_week")) %>%
+    left_join(prep_time_df %>% 
+                select(posteam, game_date, prep_days),
+              by = c("posteam", "game_date"))
+
+  fourth_downs <- fourth_downs %>%
+    mutate(defteam = ifelse(posteam == home_team, away_team, home_team)) %>%
+    left_join(run_pcts %>% 
+                mutate(join_week = week + 1) %>% 
+                select(-week), 
+              by = c("posteam", "week" = "join_week")) %>%
+    left_join(prep_time_df %>% 
+                select(posteam, game_date, prep_days),
+              by = c("posteam", "game_date"))
+
+  # Inside process_year function, after adding individual player injuries
+third_downs <- third_downs %>%
+  rowwise() %>%
+  mutate(
+    offense_injuries = list(get_team_injury_counts(posteam, game_date)),
+    defense_injuries = list(get_team_injury_counts(defteam, game_date))
+  ) %>%
+  ungroup() %>%
+  unnest_wider(c(offense_injuries, defense_injuries), 
+               names_sep = "_")
+
+fourth_downs <- fourth_downs %>%
+  rowwise() %>%
+  mutate(
+    offense_injuries = list(get_team_injury_counts(posteam, game_date)),
+    defense_injuries = list(get_team_injury_counts(defteam, game_date))
+  ) %>%
+  ungroup() %>%
+  unnest_wider(c(offense_injuries, defense_injuries), 
+               names_sep = "_")
+
+# Add team-level injury aggregates
+third_downs <- third_downs %>%
+  group_by(posteam, game_date) %>%
+  mutate(
+    offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
+    offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+  ) %>%
+  group_by(defteam, game_date) %>%
+  mutate(
+    defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
+    defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+fourth_downs <- fourth_downs %>%
+  group_by(posteam, game_date) %>%
+  mutate(
+    offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
+    offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+  ) %>%
+  group_by(defteam, game_date) %>%
+  mutate(
+    defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
+    defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+  
+
+  # Calculate previous game stats
+  all_teams_weeks <- bind_rows(
+    select(third_downs, defteam, week),
+    select(fourth_downs, defteam, week)
+  ) %>% distinct()
+
+  prev_stats <- map2_dfr(
+    all_teams_weeks$defteam,
+    all_teams_weeks$week,
+    ~{
+      prev_game <- play_year %>%
+        filter((home_team == .x | away_team == .x) & week < .y) %>%
+        arrange(desc(week)) %>%
+        slice(1) %>%
+        pull(week)
+      
+      if(length(prev_game) == 0) return(tibble(
+        defteam = .x,
+        week = .y,
+        attempts = 0,
+        successes = 0,
+        failures = 0
+      ))
+      
+      play_year %>%
+        filter(week == prev_game,
+               (home_team == .x | away_team == .x),
+               down == 4,
+               !play_type %in% c("punt", "field_goal")) %>%
+        summarize(
+          defteam = .x,
+          week = .y,
+          attempts = n(),
+          successes = sum(first_down == 1, na.rm = TRUE),
+          failures = sum(first_down == 0, na.rm = TRUE)
+        )
+    })
+  message("Step 6/7: Processing model data...")
+
+  # Process final model data
+  model_3rd <- third_downs %>%
+    mutate(
+      play_type_clean = case_when(
+        pass_attempt == 1 ~ "pass",
+        rush_attempt == 1 ~ "rush",
+        TRUE ~ "other"
+      )
+    ) %>%
+    left_join(prev_stats, by = c("defteam", "week")) %>%
+    group_by(posteam) %>%
+    arrange(week) %>%
+    mutate(
+      down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
+      down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
+      down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
+    ) %>%
+    ungroup()
+
+  model_4th <- fourth_downs %>%
+    mutate(
+      play_type_clean = case_when(
+        pass_attempt == 1 ~ "pass",
+        rush_attempt == 1 ~ "rush",
+        TRUE ~ "other"
+      )
+    ) %>%
+    left_join(prev_stats, by = c("defteam", "week")) %>%
+    group_by(posteam) %>%
+    arrange(week) %>%
+    mutate(
+      down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
+      down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
+      down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
+    ) %>%
+    ungroup()
+  
+  message("Step 7/7: Adding specialists...")
+
+  # Add specialists
+  rd2 <- load_rosters_weekly(year)
+  specialists <- rd2 %>%
+    filter(position %in% c("K", "P")) %>%
+    select(week, team, full_name, position, gsis_id)
+
+  model_4th <- model_4th %>%
+    left_join(specialists %>% 
+                filter(position == "K") %>% 
+                select(week, team, k_name=full_name, k_gsis_id=gsis_id),
+              by=c("week", "posteam"="team")) %>%
+    left_join(specialists %>% 
+                filter(position == "P") %>% 
+                select(week, team, p_name=full_name, p_gsis_id=gsis_id),
+              by=c("week", "posteam"="team"))
+
+  model_3rd <- model_3rd %>%
+    left_join(specialists %>% 
+                filter(position == "K") %>% 
+                select(week, team, k_name=full_name, k_gsis_id=gsis_id),
+              by=c("week", "posteam"="team")) %>%
+    left_join(specialists %>% 
+                filter(position == "P") %>% 
+                select(week, team, p_name=full_name, p_gsis_id=gsis_id),
+              by=c("week", "posteam"="team"))
+
+  return(list(
+    third_downs = model_3rd,
+    fourth_downs = model_4th
+  ))
+}
+
+# Process all years
+```
+
+```{r}
+# Process all years
+years <- 2016:2023
+all_data <- list()
+
+# Process each year
+for(year in years) {
+  all_data[[as.character(year)]] <- process_year(year)
+}
+
+# Combine all years
+combined_third_downs <- bind_rows(
+  lapply(all_data, function(x) x$third_downs)
+)
+
+combined_fourth_downs <- bind_rows(
+  lapply(all_data, function(x) x$fourth_downs)
+)
+```
+
+kill minutes_remaining and qtr
+
+```{r}
+combined_fourth_downs <- combined_fourth_downs %>%
+  select(-minutes_remaining, -qtr)
+```
+
+
+
+```{r}
+write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
+write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
+```
+
+
+
+
