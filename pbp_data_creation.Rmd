@@ -37,20 +37,43 @@ calc_days_since_injury <- function(player_id, current_date) {
   return(NA)
 }
 
-# Modified function to get team injury counts including previous year
+# Modified function to get team injury counts for past year and past week
 get_team_injury_counts <- function(team, game_date) {
-  team_injuries <- injuries_data %>%
+  # Ensure date is in proper format
+  game_date <- as.Date(game_date)
+  
+  # Past year injuries
+  year_ago <- game_date - 365
+  year_injuries <- injuries_data %>%
     filter(team == team,
+           injury_date >= year_ago,
            injury_date < game_date) %>%
     group_by(practice_primary_injury) %>%
     summarise(count = n(), .groups = 'drop') %>%
     pivot_wider(
       names_from = practice_primary_injury,
-      names_prefix = "injury_count_",
+      names_prefix = "injury_count_year_",
       values_from = count,
       values_fill = 0
     )
-  return(team_injuries)
+  
+  # Past week injuries
+  week_ago <- game_date - 7
+  week_injuries <- injuries_data %>%
+    filter(team == team,
+           injury_date >= week_ago,
+           injury_date < game_date) %>%
+    group_by(practice_primary_injury) %>%
+    summarise(count = n(), .groups = 'drop') %>%
+    pivot_wider(
+      names_from = practice_primary_injury,
+      names_prefix = "injury_count_week_",
+      values_from = count,
+      values_fill = 0
+    )
+  
+  # Combine both sets of counts
+  bind_cols(year_injuries, week_injuries)
 }
 
 
@@ -544,12 +567,27 @@ combined_fourth_downs <- combined_fourth_downs %>%
   select(-minutes_remaining, -qtr)
 ```
 
+```{r}
+# Extract all unique injury types
+injuries_data <- load_injuries(2016:2023) %>%
+  select(practice_primary_injury) %>%
+  distinct() %>%
+  filter(!is.na(practice_primary_injury)) %>%
+  arrange(practice_primary_injury)
+
+# Print the unique injury types
+print("Unique injury types:")
+print(injuries_data)
+```
+
+
 
 
 ```{r}
 write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
 write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
 ```
+
 
 
 
