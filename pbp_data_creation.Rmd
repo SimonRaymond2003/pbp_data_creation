@@ -36,46 +36,44 @@ calc_days_since_injury <- function(player_id, current_date) {
   }
   return(NA)
 }
-
-# Modified function to get team injury counts for past year and past week
 get_team_injury_counts <- function(team, game_date) {
   # Ensure date is in proper format
   game_date <- as.Date(game_date)
   
-  # Past year injuries
+  # First filter by team, then do all the date filtering
+  team_injuries <- injuries_data %>%
+    filter(team == !!team) %>%
+    mutate(injury_date = as.Date(date_modified))
+  
+  # Past year injuries - first group by injury type
   year_ago <- game_date - 365
-  year_injuries <- injuries_data %>%
-    filter(team == team,
-           injury_date >= year_ago,
+  year_injuries <- team_injuries %>%
+    filter(injury_date >= year_ago,
            injury_date < game_date) %>%
-    group_by(practice_primary_injury) %>%
-    summarise(count = n(), .groups = 'drop') %>%
+    count(practice_primary_injury) %>%
     pivot_wider(
       names_from = practice_primary_injury,
       names_prefix = "injury_count_year_",
-      values_from = count,
+      values_from = n,
       values_fill = 0
     )
   
-  # Past week injuries by type
+  # Past week injuries
   week_ago <- game_date - 7
-  week_injuries <- injuries_data %>%
-    filter(team == team,
-           injury_date >= week_ago,
+  week_injuries <- team_injuries %>%
+    filter(injury_date >= week_ago,
            injury_date < game_date) %>%
-    group_by(practice_primary_injury) %>%
-    summarise(count = n(), .groups = 'drop') %>%
+    count(practice_primary_injury) %>%
     pivot_wider(
       names_from = practice_primary_injury,
       names_prefix = "injury_count_week_",
-      values_from = count,
+      values_from = n,
       values_fill = 0
     )
     
   # Past week status counts
-  week_status <- injuries_data %>%
-    filter(team == team,
-           injury_date >= week_ago,
+  week_status <- team_injuries %>%
+    filter(injury_date >= week_ago,
            injury_date < game_date) %>%
     summarise(
       week_questionable = sum(report_status == "Questionable", na.rm = TRUE),
@@ -88,7 +86,6 @@ get_team_injury_counts <- function(team, game_date) {
   # Combine all counts
   bind_cols(year_injuries, week_injuries, week_status)
 }
-
 
   
   # Load play by play data and participation data for the year
@@ -625,6 +622,10 @@ write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
 ```
 
 
+# Explinations and proofs
+
+offense_player_1_days_since_injury       # Days since last injury for player 
+
 offense_player_1_current_status         # Most recent game status (Questionable/Doubtful/Out/NA)
 offense_player_1_current_practice       # Most recent practice status (Limited/DNP/Full/NA)
 
@@ -666,7 +667,109 @@ print(injury_frequencies)
 ```
 
 
-injury_count_year_Knee_offense   # Count of knee injuries for offense in past 365 days
-injury_count_week_Knee_offense   # Count of knee injuries for offense in past 7 days
-injury_count_year_Knee_defense   # Count of knee injuries for defense in past 365 days
-injury_count_week_Knee_defense   # Count of knee injuries for defense in past 7 days
+offense_injuries_injury_count_year   # Count of knee injuries for offense in past 365 days
+offense_injuries_injury_count_week   # Count of knee injuries for offense in past 7 days
+defense_injuries_injury_count_year   # Count of knee injuries for defense in past 365 days
+defense_injuries_injury_count_week   # Count of knee injuries for defense in past 7 days
+
+
+Proof that the injuries are proper
+```{r}
+t1 <- combined_fourth_downs[5000, ]
+```
+
+
+```{r}
+t1$game_id
+# date of game
+t1$game_date
+```
+
+game date
+```{r}
+t1$game_date
+```
+
+full names of all players on the feild
+```{r}
+t1$offense_player_1_full_name
+t1$defense_player_1_full_name
+```
+
+```{r}
+t1$offense_player_1_days_since_injury
+t1$defense_player_1_days_since_injury
+```
+load injury data
+
+```{r}
+inj1 <- load_injuries(2017)
+```
+
+
+get the injuries of players with the same names as either offensive of defensive players
+
+```{r}
+filt_inj <- inj1 %>% filter(full_name %in% c(t1$offense_player_1_full_name, t1$defense_player_1_full_name))
+```
+
+select the dates of the injuries for each player 
+```{r}
+filt_inj %>% select(full_name, date_modified)
+```
+the game was on the 10th of september 2017. we can see a injury on the 6th. Our 4 days since injury is accurate.
+
+
+injury count for the year
+```{r}
+inj2 <- load_injuries(2016:2017)
+```
+
+```{r}
+
+# get Deandre hopkins injury data from 2017 and 2016 
+inj2 <- inj2 %>% filter(full_name ==  t1$offense_player_1_full_name)
+```
+
+
+get the injuries that happened before the date of the game
+```{r}
+inj2 <- inj2 %>% filter(date_modified < t1$game_date)
+```
+
+```{r}
+nrow(inj2)
+t1$offense_player_1_injury_count_1yr
+```
+
+offense_injury_count_year_Ankle # Count of ankle injuries for offense in past 365 days
+offense_injury_count_week_Ankle # Count of ankle injuries for offense in past 7 days
+
+
+
+```{r}
+# Convert game_date to Date object
+game_date <- as.Date(t1$game_date)
+
+# Test for week count
+inj3_week <- inj3 %>% 
+  mutate(date_modified = as.Date(date_modified)) %>%
+  filter(date_modified >= game_date - 7,
+         date_modified < game_date)
+
+# Test for year count
+inj3_year <- inj3 %>%
+  mutate(date_modified = as.Date(date_modified)) %>%
+  filter(date_modified >= game_date - 365,
+         date_modified < game_date)
+
+print("Week count:")
+print(nrow(inj3_week))
+print("Year count:")
+print(nrow(inj3_year))
+
+# Also print actual values we're comparing against from t1
+print("Values from dataset:")
+print(paste("Week count in data:", t1$offense_injuries_injury_count_week_Ankle))
+print(paste("Year count in data:", t1$offense_injuries_injury_count_year_Ankle))
+```
