@@ -1,0 +1,242 @@
+---
+title: "PFF Variable Analysis 2015"
+output: html_document
+date: "2024-12-31"
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+```
+
+# Passing Reports
+## Passing Grades
+```{r}
+passing_grades <- read_csv("yearly_data/2015/passing_summary.csv")
+print("Passing Grades Columns:")
+print(colnames(passing_grades))
+```
+## Passing Depth
+```{r}
+passing_depth <- read_csv("yearly_data/2015/passing_depth.csv")
+print("Passing Depth Columns:")
+print(colnames(passing_depth))
+```
+## Passing Pressure
+```{r}
+passing_pressure <- read_csv("yearly_data/2015/passing_pressure.csv")
+print("Passing Pressure Columns:")
+print(colnames(passing_pressure))
+```
+## Passing Concept
+```{r}
+passing_concept <- read_csv("yearly_data/2015/passing_concept.csv")
+print("Passing Concept Columns:")
+print(colnames(passing_concept))
+```
+## Time In Pocket
+```{r}
+time_in_pocket <- read_csv("yearly_data/2015/time_in_pocket.csv")
+print("Time In Pocket Columns:")
+print(colnames(time_in_pocket))
+```
+## Allowed Pressure
+```{r}
+allowed_pressure <- read_csv("yearly_data/2015/passing_allowed_pressure.csv")
+print("Allowed Pressure Columns:")
+print(colnames(allowed_pressure))
+```
+# Receiving Reports
+## Receiving Grades
+```{r}
+receiving_grades <- read_csv("yearly_data/2015/receiving_summary.csv")
+print("Receiving Grades Columns:")
+print(colnames(receiving_grades))
+```
+## Receiving Depth
+```{r}
+receiving_depth <- read_csv("yearly_data/2015/receiving_depth.csv")
+print("Receiving Depth Columns:")
+print(colnames(receiving_depth))
+```
+## Receiving Concept
+```{r}
+receiving_concept <- read_csv("yearly_data/2015/receiving_concept.csv")
+print("Receiving Concept Columns:")
+print(colnames(receiving_concept))
+```
+## Receiving vs Scheme
+```{r}
+receiving_vs_scheme <- read_csv("yearly_data/2015/receiving_scheme.csv")
+print("Receiving vs Scheme Columns:")
+print(colnames(receiving_vs_scheme))
+```
+# Rushing Reports
+## Rushing Grades
+```{r}
+rushing_grades <- read_csv("yearly_data/2015/rushing_summary.csv")
+print("Rushing Grades Columns:")
+print(colnames(rushing_grades))
+```
+# Blocking Reports
+## Blocking Grades
+```{r}
+blocking_grades <- read_csv("yearly_data/2015/offense_blocking.csv")
+print("Blocking Grades Columns:")
+print(colnames(blocking_grades))
+```
+## Pass Blocking
+```{r}
+pass_blocking <- read_csv("yearly_data/2015/offense_pass_blocking.csv")
+print("Pass Blocking Columns:")
+print(colnames(pass_blocking))
+```
+## Run Blocking
+```{r}
+run_blocking <- read_csv("yearly_data/2015/offense_run_blockng.csv")
+print("Run Blocking Columns:")
+print(colnames(run_blocking))
+```
+# Defense Reports
+## Defense Grades
+```{r}
+defensive_grades <- read_csv("yearly_data/2015/defense_summary.csv")
+print("Defense Grades Columns:")
+print(colnames(defensive_grades))
+```
+## Pass Rush Grades
+```{r}
+pass_rush_grades <- read_csv("yearly_data/2015/pass_rush_summary.csv")
+print("Pass Rush Grades Columns:")
+print(colnames(pass_rush_grades))
+```
+## Run Defense Grades
+```{r}
+run_defense_grades <- read_csv("yearly_data/2015/run_defense_summary.csv")
+print("Run Defense Grades Columns:")
+print(colnames(run_defense_grades))
+```
+## Coverage Grades
+```{r}
+coverage_grades <- read_csv("yearly_data/2015/defense_coverage_summary.csv")
+print("Coverage Grades Columns:")
+print(colnames(coverage_grades))
+```
+## Coverage Scheme
+```{r}
+coverage_schemes <- read_csv("yearly_data/2015/defense_coverage_scheme.csv")
+print("Coverage Scheme Columns:")
+print(colnames(coverage_schemes))
+```
+## Slot Coverage
+```{r}
+slot_coverage <- read_csv("yearly_data/2015/slot_coverage.csv")
+print("Slot Coverage Columns:")
+print(colnames(slot_coverage))
+```
+## Pass Rushing Productivity
+```{r}
+pass_rushing_productivity <- read_csv("yearly_data/2015/pass_rush_productivity.csv")
+print("Pass Rushing Productivity Columns:")
+print(colnames(pass_rushing_productivity))
+```
+# Special Teams Reports
+## Special Teams Grades
+```{r}
+special_teams_grades <- read_csv("yearly_data/2015/special_teams_summary.csv")
+print("Special Teams Grades Columns:")
+print(colnames(special_teams_grades))
+```
+## Field Goal Grades
+```{r}
+field_goals_grades <- read_csv("yearly_data/2015/field_goal_summary.csv")
+print("Field Goal Grades Columns:")
+print(colnames(field_goals_grades))
+```
+## Kickoff Grades
+```{r}
+kickoff_grades <- read_csv("yearly_data/2015/kickoff_summary.csv")
+print("Kickoff Grades Columns:")
+print(colnames(kickoff_grades))
+```
+## Punting Grades
+```{r}
+punting_grades <- read_csv("yearly_data/2015/punting_summary.csv")
+print("Punting Grades Columns:")
+print(colnames(punting_grades))
+```
+## Kickoff and Punt Return Grades
+```{r}
+kickoff_and_punt_return_grades <- read_csv("yearly_data/2015/return_summary.csv")
+print("Kickoff and Punt Return Grades Columns:")
+print(colnames(kickoff_and_punt_return_grades))
+```
+
+# Column Analysis Summary
+```{r}
+# Create list of all dataframes with their names
+all_dfs <- list(
+  "passing_grades" = passing_grades,
+  "passing_depth" = passing_depth,
+  "passing_pressure" = passing_pressure,
+  "passing_concept" = passing_concept,
+  "time_in_pocket" = time_in_pocket,
+  "allowed_pressure" = allowed_pressure,
+  "receiving_grades" = receiving_grades,
+  "receiving_depth" = receiving_depth,
+  "receiving_concept" = receiving_concept,
+  "receiving_vs_scheme" = receiving_vs_scheme,
+  "rushing_grades" = rushing_grades,
+  "blocking_grades" = blocking_grades,
+  "pass_blocking" = pass_blocking,
+  "run_blocking" = run_blocking,
+  "defensive_grades" = defensive_grades,
+  "pass_rush_grades" = pass_rush_grades,
+  "run_defense_grades" = run_defense_grades,
+  "coverage_grades" = coverage_grades,
+  "coverage_schemes" = coverage_schemes,
+  "slot_coverage" = slot_coverage,
+  "pass_rushing_productivity" = pass_rushing_productivity,
+  "special_teams_grades" = special_teams_grades,
+  "field_goals_grades" = field_goals_grades,
+  "kickoff_grades" = kickoff_grades,
+  "punting_grades" = punting_grades,
+  "kickoff_and_punt_return_grades" = kickoff_and_punt_return_grades
+)
+
+# Create a dataframe showing which columns appear in which reports
+column_summary <- data.frame(
+  column_name = character(),
+  appears_in = character(),
+  num_reports = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# For each unique column name across all dataframes
+unique_cols <- unique(unlist(lapply(all_dfs, colnames)))
+
+for(col in unique_cols) {
+  # Find which reports contain this column
+  reports_with_col <- names(all_dfs)[sapply(all_dfs, function(df) col %in% colnames(df))]
+  
+  # Add to summary dataframe
+  column_summary <- rbind(column_summary, 
+                         data.frame(
+                           column_name = col,
+                           appears_in = paste(reports_with_col, collapse = ", "),
+                           num_reports = length(reports_with_col),
+                           stringsAsFactors = FALSE
+                         ))
+}
+
+# Sort by number of reports (descending) and alphabetically by column name
+column_summary <- column_summary %>%
+  arrange(desc(num_reports), column_name)
+
+# Print the final summary
+print("\nColumn Summary:")
+print(column_summary, row.names = FALSE)
+```
+
+

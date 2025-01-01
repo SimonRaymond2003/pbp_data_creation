@@ -13,7 +13,9 @@ library(purrr)
 library(zoo)
 library(car)
 library(progress)
+```
 
+```{r}
 # Function to process a single year's data
 process_year <- function(year) {
   message(paste("\nProcessing year:", year))
@@ -36,6 +38,7 @@ calc_days_since_injury <- function(player_id, current_date) {
   }
   return(NA)
 }
+
 get_team_injury_counts <- function(team, game_date) {
   # Ensure date is in proper format
   game_date <- as.Date(game_date)
@@ -277,6 +280,7 @@ add_player_info <- function(df, players_data, player_col, prefix) {
       game_id,
       game_date,
       posteam,
+      desc,
       home_team,
       away_team,
       ydstogo,
@@ -330,6 +334,7 @@ add_player_info <- function(df, players_data, player_col, prefix) {
       game_id,
       game_date,
       posteam,
+      desc,
       home_team,
       away_team,
       ydstogo,
@@ -375,9 +380,22 @@ add_player_info <- function(df, players_data, player_col, prefix) {
              sep = ";", 
              fill = "right")
   
+  # Inside process_year function, after loading play by play data but before processing
+# Determine max regular season week based on year
+max_week <- if(year >= 2021) 18 else 17
+
+# Filter both third and fourth downs for regular season only
+third_downs <- third_downs %>%
+  filter(week <= max_week)
+
+fourth_downs <- fourth_downs %>%
+  filter(week <= max_week)
+  
   message("Step 4/7: Adding player information...")
   # Add player information for both offensive and defensive players
   for(i in 1:11) {
+    
+    cat("\rProcessing player", i, "of 11")
     # Process offensive players
     third_downs <- add_player_info(third_downs, 
                                   roster_data, 
@@ -548,32 +566,65 @@ fourth_downs <- fourth_downs %>%
     ungroup()
   
   message("Step 7/7: Adding specialists...")
+# Get the specialists based on actual game play
+get_specialists <- function(year) {
+  # Load play by play data for current and previous year
+  pbp <- bind_rows(
+    load_pbp(year),
+    load_pbp(year - 1)
+  ) %>%
+  arrange(game_date, desc(play_id))  # Most recent plays first
+  
+  # Get last kicker to attempt FG/XP for each team/week
+  kickers <- pbp %>%
+    filter(field_goal_attempt == 1 | extra_point_attempt == 1) %>%
+    select(team = posteam, week, season, kicker_player_id, kicker_player_name) %>%
+    distinct(team, week, season, .keep_all = TRUE)
+    
+  # Get last punter to punt for each team/week  
+  punters <- pbp %>%
+    filter(punt_attempt == 1) %>%
+    select(team = posteam, week, season, punter_player_id, punter_player_name) %>%
+    distinct(team, week, season, .keep_all = TRUE)
+    
+  # For each play, get the most recent specialist prior to that game
+  list(kickers = kickers, punters = punters)
+}
 
-  # Add specialists
-  rd2 <- load_rosters_weekly(year)
-  specialists <- rd2 %>%
-    filter(position %in% c("K", "P")) %>%
-    select(week, team, full_name, position, gsis_id)
+# Then modify your join to use this historical perspective:
+specialists <- get_specialists(year)
 
-  model_4th <- model_4th %>%
-    left_join(specialists %>% 
-                filter(position == "K") %>% 
-                select(week, team, k_name=full_name, k_gsis_id=gsis_id),
-              by=c("week", "posteam"="team")) %>%
-    left_join(specialists %>% 
-                filter(position == "P") %>% 
-                select(week, team, p_name=full_name, p_gsis_id=gsis_id),
-              by=c("week", "posteam"="team"))
+model_4th <- model_4th %>%
+  left_join(
+    specialists$kickers %>%
+      filter(season == year | season == year - 1) %>%
+      arrange(desc(season), desc(week)) %>%
+      distinct(team, .keep_all = TRUE),
+    by = c("posteam" = "team")
+  ) %>%
+  left_join(
+    specialists$punters %>%
+      filter(season == year | season == year - 1) %>%
+      arrange(desc(season), desc(week)) %>%
+      distinct(team, .keep_all = TRUE),
+    by = c("posteam" = "team")
+  )
 
-  model_3rd <- model_3rd %>%
-    left_join(specialists %>% 
-                filter(position == "K") %>% 
-                select(week, team, k_name=full_name, k_gsis_id=gsis_id),
-              by=c("week", "posteam"="team")) %>%
-    left_join(specialists %>% 
-                filter(position == "P") %>% 
-                select(week, team, p_name=full_name, p_gsis_id=gsis_id),
-              by=c("week", "posteam"="team"))
+model_3rd <- model_3rd %>%
+  left_join(
+    specialists$kickers %>%
+      filter(season == year | season == year - 1) %>%
+      arrange(desc(season), desc(week)) %>%
+      distinct(team, .keep_all = TRUE),
+    by = c("posteam" = "team")
+  ) %>%
+  left_join(
+    specialists$punters %>%
+      filter(season == year | season == year - 1) %>%
+      arrange(desc(season), desc(week)) %>%
+      distinct(team, .keep_all = TRUE),
+    by = c("posteam" = "team")
+  )
 
   return(list(
     third_downs = model_3rd,
@@ -619,6 +670,13 @@ combined_fourth_downs <- combined_fourth_downs %>%
 ```{r}
 write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
 write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
+```
+
+
+```{r}
+library(readr)
+combined_third_downs <- read.csv("ctd.csv")
+combined_fourth_downs <- read.csv("cfd.csv")
 ```
 
 
@@ -772,4 +830,71 @@ print(nrow(inj3_year))
 print("Values from dataset:")
 print(paste("Week count in data:", t1$offense_injuries_injury_count_week_Ankle))
 print(paste("Year count in data:", t1$offense_injuries_injury_count_year_Ankle))
+```
+
+# Filtering for only 4th down attempts that are a rush_attempt = 1 or pass_attempt = 1
+```{r}
+attempts_4th <- combined_fourth_downs %>%
+  filter(rush_attempt == 1 | pass_attempt == 1)
+
+
+```
+
+```{r}
+# Define defensive positions
+defensive_positions <- c("K", "P", "LS", "DB", "CB", "S", "FS", "SS", "LB", "ILB", "OLB", "MLB", "DL", "DE", "DT", "NT", "EDGE")
+
+# Function to check if any offensive player has a defensive position
+check_defensive_positions <- function(row) {
+  # Get all offensive player positions
+  positions <- c()
+  for(i in 1:11) {
+    pos_col <- paste0("offense_player_", i, "_position")
+    if(pos_col %in% names(row)) {
+      positions <- c(positions, row[[pos_col]])
+    }
+  }
+  
+  # Return TRUE if no defensive positions found
+  !any(positions %in% defensive_positions, na.rm = TRUE)
+}
+
+# Apply the filter
+clean_attempts_4th <- attempts_4th %>%
+  filter(mapply(check_defensive_positions, split(., 1:nrow(.))))
+
+# Print the number of rows removed
+cat("Original rows:", nrow(attempts_4th), "\n")
+cat("Rows after filtering:", nrow(clean_attempts_4th), "\n")
+cat("Rows removed:", nrow(attempts_4th) - nrow(clean_attempts_4th), "\n")
+
+# Optional: Examine some examples of removed plays
+removed_plays <- attempts_4th %>%
+  filter(!mapply(check_defensive_positions, split(., 1:nrow(.)))) %>%
+  select(play_id, game_id, desc, matches("offense_player_\\d+_position"))
+
+# Show first few removed plays
+head(removed_plays)
+```
+
+# identifying row duplication
+
+```{r}
+cfd <- read.csv("cfd.csv")
+cfd <- cfd[c(10002:10004), ]
+# selects these rows that are duplicates
+```
+
+```{r}
+cfd %>% 
+  summarise(across(everything(), ~n_distinct(.x))) %>%
+  select_if(~. > 1) %>%
+  names()
+```
+
+get just those cols [1] "k_name"    "k_gsis_id" "p_name"    "p_gsis_id"
+
+
+```{r}
+cfd4 <- cfd %>% select(k_name, k_gsis_id, p_name, p_gsis_id)
 ```

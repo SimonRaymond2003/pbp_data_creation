@@ -1,0 +1,65 @@
+---
+title: "pbp_names"
+output: html_document
+date: "2024-12-18"
+---
+read the pbp data
+```{r}
+library(readr)
+cfd <- read_csv("cfd.csv")
+ctd <- read_csv("ctd.csv")
+```
+
+```{r}
+## Create list of column names with correct format
+gsis_id_columns <- c(
+  # Season and week
+  "season", "week",
+  # Players (offense and defense numbered)
+  paste0("offense_player_", 1:11),
+  paste0("defense_player_", 1:11),
+  # Special teams
+  "kicker_player_id", 
+  "punter_player_id"
+)
+
+# Create dataframes with only these columns for both datasets
+gsis_df_cfd <- cfd %>% select(all_of(gsis_id_columns))
+gsis_df_ctd <- ctd %>% select(all_of(gsis_id_columns))
+
+# Create single column dataframes of all unique IDs from each dataset
+unique_ids_cfd <- gsis_df_cfd %>%
+  select(-season, -week) %>%
+  unlist() %>%
+  unique() %>%
+  na.omit() %>%
+  as.data.frame()
+
+unique_ids_ctd <- gsis_df_ctd %>%
+  select(-season, -week) %>%
+  unlist() %>%
+  unique() %>%
+  na.omit() %>%
+  as.data.frame()
+
+# Rename the columns
+names(unique_ids_cfd) <- "gsis_id"
+names(unique_ids_ctd) <- "gsis_id"
+
+# Combine both and get unique IDs across both datasets
+all_unique_ids <- unique(c(unique_ids_cfd$gsis_id, unique_ids_ctd$gsis_id)) %>%
+  as.data.frame()
+names(all_unique_ids) <- "gsis_id"
+
+# Print summary
+cat("Unique IDs in CFD:", nrow(unique_ids_cfd), "\n")
+cat("Unique IDs in CTD:", nrow(unique_ids_ctd), "\n")
+cat("Total unique IDs across both datasets:", nrow(all_unique_ids))
+```
+write pbp_unique_ids to csv
+```{r}
+write_csv(all_unique_ids, "pbp_unique_ids.csv")
+```
+
+
+

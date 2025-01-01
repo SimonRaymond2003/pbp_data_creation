@@ -1,0 +1,156 @@
+---
+title: "ypff_stats"
+output: html_document
+date: "2024-12-31"
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(digest)
+library(data.table)
+library(progress)
+library(tidyr)
+
+# Read yearly data files
+read_yearly_data <- function(base_path, year) {
+  reports <- list(
+    passing_grades = "passing_summary.csv",
+    passing_depth = "passing_depth.csv",
+    passing_pressure = "passing_pressure.csv",
+    passing_concept = "passing_concept.csv",
+    time_in_pocket = "time_in_pocket.csv",
+    allowed_pressure = "passing_allowed_pressure.csv",
+    receiving_grades = "receiving_summary.csv",
+    receiving_depth = "receiving_depth.csv",
+    receiving_concept = "receiving_concept.csv",
+    receiving_vs_scheme = "receiving_scheme.csv",
+    rushing_grades = "rushing_summary.csv",
+    blocking_grades = "offense_blocking.csv",
+    pass_blocking = "offense_pass_blocking.csv",
+    run_blocking = "offense_run_blockng.csv",
+    defensive_grades = "defense_summary.csv",
+    pass_rush_grades = "pass_rush_summary.csv",
+    run_defense_grades = "run_defense_summary.csv",
+    coverage_grades = "defense_coverage_summary.csv",
+    coverage_schemes = "defense_coverage_scheme.csv",
+    slot_coverage = "slot_coverage.csv",
+    pass_rushing_productivity = "pass_rush_productivity.csv",
+    special_teams_grades = "special_teams_summary.csv",
+    field_goals_grades = "field_goal_summary.csv",
+    kickoff_grades = "kickoff_summary.csv",
+    punting_grades = "punting_summary.csv",
+    kickoff_and_punt_return_grades = "return_summary.csv"
+  )
+  
+  dfs <- list()
+  for(report_name in names(reports)) {
+    file_path <- file.path(base_path, as.character(year), reports[[report_name]])
+    if(file.exists(file_path)) {
+      tryCatch({
+        df <- read_csv(file_path, show_col_types = FALSE)
+        df$year <- year
+        
+        # Rename columns with report prefix (except key columns)
+        key_cols <- c("player_id", "player", "year")
+        cols_to_rename <- setdiff(names(df), key_cols)
+        for(col in cols_to_rename) {
+          names(df)[names(df) == col] <- paste0(report_name, "_", col)
+        }
+        
+        dfs[[report_name]] <- df
+      }, error = function(e) {
+        warning(sprintf("Error reading %s for year %d: %s", report_name, year, e$message))
+      })
+    }
+  }
+  return(dfs)
+}
+
+# Process data for all years
+all_data <- list()
+for(year in 2014:2023) {
+  cat(sprintf("\nProcessing year %d...\n", year))
+  all_data[[as.character(year)]] <- read_yearly_data("yearly_data", year)
+}
+
+# Collect player information
+players_list <- list()
+for(year in names(all_data)) {
+  for(report in names(all_data[[year]])) {
+    df <- all_data[[year]][[report]]
+    if("player_id" %in% colnames(df) && "player" %in% colnames(df)) {
+      players_list[[paste(year, report)]] <- df %>%
+        select(player_id, player) %>%
+        distinct()
+    }
+  }
+}
+
+players_df <- bind_rows(players_list) %>%
+  distinct() %>%
+  arrange(player_id)
+
+# Get all unique columns (now including report prefixes)
+all_columns <- unique(unlist(lapply(all_data, function(year) {
+  unlist(lapply(year, colnames))
+})))
+unique_columns <- setdiff(all_columns, c("player_id", "player", "year"))
+
+# Create expanded yearly PFF stats
+years <- 2014:2023
+ypff_stats <- players_df %>%
+  tidyr::crossing(year = years) %>%
+  arrange(player_id, year)
+
+# Initialize all columns as NA
+for(col in unique_columns) {
+  ypff_stats[[col]] <- NA
+}
+
+# Fill data for each year
+for(year in names(all_data)) {
+  cat(sprintf("\nFilling data for year %s...\n", year))
+  for(report_name in names(all_data[[year]])) {
+    report_df <- all_data[[year]][[report_name]]
+    
+    # Simple left join since columns are already uniquely named
+    ypff_stats <- ypff_stats %>%
+      left_join(
+        report_df %>% select(-player),  # Exclude player name to avoid duplicates
+        by = c("player_id", "year")
+      )
+  }
+}
+
+# Write ypff_stats
+fwrite(ypff_stats, "ypff_stats.csv.gz", compress = "gzip")
+
+# Clean yearly PFF stats
+cat("Starting yearly PFF stats cleaning process...\n")
+initial_rows <- nrow(ypff_stats)
+exclude_cols <- c("player_id", "player", "year")
+rows_with_data <- logical(initial_rows)
+chunk_size <- 10000
+chunks <- split(1:initial_rows, ceiling(seq_along(1:initial_rows)/chunk_size))
+
+pb <- progress_bar$new(
+  format = "Processing [:bar] :percent eta: :eta",
+  total = initial_rows,
+  clear = FALSE,
+  width = 60
+)
+
+for(chunk in chunks) {
+  chunk_data <- ypff_stats[chunk, !(names(ypff_stats) %in% exclude_cols)]
+  rows_with_data[chunk] <- apply(chunk_data, 1, function(row) sum(!is.na(row))) > 0
+  pb$tick(length(chunk))
+}
+
+cypff_stats <- ypff_stats[rows_with_data, ]
+
+# Write cypff_stats
+fwrite(cypff_stats, "cypff_stats.csv.gz", compress = "gzip")
+```

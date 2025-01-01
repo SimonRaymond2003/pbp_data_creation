@@ -1,0 +1,89 @@
+---
+title: "pff_names"
+output: html_document
+date: "2024-12-18"
+---
+
+fread the cleaned data
+```{r}
+library(data.table)
+cpff_stats <- fread("cpff_stats.csv.gz")
+```
+
+view it via top 1000 cols
+
+```{r}
+cpff_1000 <- cpff_stats[1:1000, ]
+```
+
+get only the following collums 
+
+year, week, player, position, team_name, player_id using dpylr
+
+```{r}
+library(dplyr)
+names_pff <- cpff_stats %>% select(year, week, player, position, team_name, player_id)
+```
+
+
+```{r}
+# First, let's get unique player-team-year combinations
+# This will handle cases where players switch teams, ignoring same-team repeats
+player_teams <- names_pff %>%
+  distinct(player_id, player, team_name, year) %>%
+  group_by(player_id) %>%
+  arrange(year) %>%
+  # Only keep rows where team changes
+  mutate(team_changed = team_name != lag(team_name, default = first(team_name))) %>%
+  filter(row_number() == 1 | team_changed) %>%
+  ungroup() %>%
+  arrange(player_id, year)
+
+# Get earliest and latest years for each player
+player_years <- names_pff %>%
+  group_by(player_id) %>%
+  summarise(
+    earliest_year = min(year),
+    latest_year = max(year)
+  )
+
+# Get most recent position for each player
+player_position <- names_pff %>%
+  group_by(player_id) %>%
+  arrange(desc(year), desc(week)) %>%
+  slice(1) %>%
+  select(player_id, position)
+
+# Get sequential teams for each player (only when team actually changes)
+player_team_history <- player_teams %>%
+  group_by(player_id) %>%
+  arrange(year) %>%
+  mutate(
+    team_sequence = paste0("team", row_number())
+  ) %>%
+  pivot_wider(
+    id_cols = player_id,
+    names_from = team_sequence,
+    values_from = team_name
+  )
+
+# Get most recent player name
+player_names <- names_pff %>%
+  group_by(player_id) %>%
+  arrange(desc(year), desc(week)) %>%
+  slice(1) %>%
+  select(player_id, player)
+
+# Combine all information
+final_pff_roster <- player_names %>%
+  left_join(player_years, by = "player_id") %>%
+  left_join(player_position, by = "player_id") %>%
+  left_join(player_team_history, by = "player_id")
+
+```
+write
+```{r}
+write.csv(final_pff_roster, "pff_roster.csv", row.names = FALSE)
+```
+
+
