@@ -323,6 +323,7 @@ get_unique_columns <- function() {
   return(all_columns)
 }
 
+# Function to fill pff_stats with data from all reports including special teams
 fill_pff_stats_fast_dplyr <- function(pff_stats) {
   # Create list of all report dataframes
   reports <- list(
@@ -368,32 +369,37 @@ fill_pff_stats_fast_dplyr <- function(pff_stats) {
     if("year" %in% names(report_df)) report_df$year <- as.integer(report_df$year)
     if("week" %in% names(report_df)) report_df$week <- as.integer(report_df$week)
     
-    # Get columns that exist in both dataframes, excluding key columns
-    key_cols <- c("player_id", "player", "year", "week")
-    cols_to_rename <- setdiff(names(report_df), key_cols)
+    # Get columns that exist in both dataframes
+    matching_cols <- intersect(colnames(report_df), colnames(pff_stats))
     
-    # Create a new dataframe with renamed columns
-    renamed_df <- report_df
-    
-    # Rename columns by adding report prefix
-    for(col in cols_to_rename) {
-      new_name <- paste0(report_name, "_", col)
-      names(renamed_df)[names(renamed_df) == col] <- new_name
+    if(length(matching_cols) > 0) {
+      # Join and update in one operation
+      pff_stats <- pff_stats %>%
+        left_join(
+          report_df %>% select(all_of(matching_cols)),
+          by = c("player_id", "year", "week")
+        )
+      
+      # For columns that got duplicated with .x and .y suffixes
+      duplicate_cols <- matching_cols[matching_cols != "player_id" & 
+                                    matching_cols != "year" & 
+                                    matching_cols != "week"]
+      
+      if(length(duplicate_cols) > 0) {
+        for(col in duplicate_cols) {
+          if(paste0(col, ".y") %in% names(pff_stats)) {
+            pff_stats[[col]] <- coalesce(pff_stats[[paste0(col, ".y")]], pff_stats[[paste0(col, ".x")]])
+            pff_stats[[paste0(col, ".x")]] <- NULL
+            pff_stats[[paste0(col, ".y")]] <- NULL
+          }
+        }
+      }
     }
-    
-    # Join with existing data
-    pff_stats <- pff_stats %>%
-      left_join(
-        renamed_df %>% select(-player),  # Exclude player name to avoid duplicates
-        by = c("player_id", "year", "week")
-      )
     
     cat(" done\n")
   }
-  
-  cat("Processing complete!\n")
-  return(pff_stats)
-}
+    cat("Processing complete!\n")
+  return(pff_stats)}
 
 # Function to get unique players - updated to include special teams
 get_unique_players <- function() {
