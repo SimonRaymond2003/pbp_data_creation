@@ -550,6 +550,44 @@ message("Step 3/7: Processing third and fourth downs...")
       }
     }
   }
+  
+  message("Step 3.7/7: Counting original and assigned players...")
+  
+  # For third downs
+  message("  Processing third downs...")
+  third_downs <- third_downs %>%
+    mutate(
+      original_offense_count = ifelse(is.na(offense_players) | offense_players == "", 
+                                    0, 
+                                    lengths(strsplit(offense_players, ";"))),
+      original_defense_count = ifelse(is.na(defense_players) | defense_players == "", 
+                                    0, 
+                                    lengths(strsplit(defense_players, ";")))
+    ) %>%
+    rowwise() %>%
+    mutate(
+      assigned_offense_count = sum(!is.na(c_across(starts_with("offense_player_")))),
+      assigned_defense_count = sum(!is.na(c_across(starts_with("defense_player_"))))
+    ) %>%
+    ungroup()
+  
+  # For fourth downs
+  message("  Processing fourth downs...")
+  fourth_downs <- fourth_downs %>%
+    mutate(
+      original_offense_count = ifelse(is.na(offense_players) | offense_players == "", 
+                                    0, 
+                                    lengths(strsplit(offense_players, ";"))),
+      original_defense_count = ifelse(is.na(defense_players) | defense_players == "", 
+                                    0, 
+                                    lengths(strsplit(defense_players, ";")))
+    ) %>%
+    rowwise() %>%
+    mutate(
+      assigned_offense_count = sum(!is.na(c_across(starts_with("offense_player_")))),
+      assigned_defense_count = sum(!is.na(c_across(starts_with("defense_player_"))))
+    ) %>%
+    ungroup()
 
   message("Step 4/7: Adding player information...")
   for(i in 1:11) {
@@ -754,7 +792,7 @@ left_join(prev_stats, by = c("defteam", "week")) %>%
 
 ```{r}
 # Main processing
-years <- 2016#:2023
+years <- 2016:2023
 all_data <- list()
 
 for(year in years) {
@@ -772,8 +810,8 @@ combined_fourth_downs <- bind_rows(
 
 ```{r}
 # Save results
-#write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
-#write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
+write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
+write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
 ```
 
 
