@@ -280,6 +280,225 @@ process_year <- function(year) {
     ) %>%
     ungroup()
 
+  # Add after run_pcts but before prep_time_df in Step 2/7:
+  message("Step 2.5/7: Processing coach history...")
+  
+  # Get coach records across all games
+  coach_records <- play_year %>%
+    select(game_id, game_date, home_team, away_team, home_coach, away_coach,
+           home_score, away_score) %>%
+    distinct() %>%
+    # Get home coach records
+    mutate(
+      home_win = home_score > away_score,
+      home_loss = home_score < away_score
+    ) %>%
+    group_by(home_coach) %>%
+    summarize(
+      overall_wins = sum(home_win, na.rm = TRUE),
+      overall_losses = sum(home_loss, na.rm = TRUE),
+      overall_win_pct = round(sum(home_win, na.rm = TRUE) / n(), 3)
+    ) %>%
+    # Combine with away coach records
+    bind_rows(
+      play_year %>%
+      select(game_id, away_coach, home_score, away_score) %>%
+      distinct() %>%
+      group_by(away_coach) %>%
+      summarize(
+        overall_wins = sum(away_score > home_score, na.rm = TRUE),
+        overall_losses = sum(away_score < home_score, na.rm = TRUE),
+        overall_win_pct = round(sum(away_score > home_score, na.rm = TRUE) / n(), 3)
+      )
+    ) %>%
+    group_by(home_coach) %>%
+    summarize(
+      overall_wins = sum(overall_wins),
+      overall_losses = sum(overall_losses),
+      overall_win_pct = round(mean(overall_win_pct), 3)
+    ) %>%
+    rename(coach = home_coach)
+
+  # Get coach records with current team only
+  current_team_records <- play_year %>%
+    select(game_id, game_date, posteam, home_team, away_team, home_coach, away_coach,
+           posteam_score, defteam_score) %>%
+    distinct() %>%
+    mutate(
+      coach = ifelse(posteam == home_team, home_coach, away_coach)
+    ) %>%
+    group_by(coach, posteam) %>%
+    summarize(
+      team_wins = sum(posteam_score > defteam_score, na.rm = TRUE),
+      team_losses = sum(posteam_score < defteam_score, na.rm = TRUE),
+      team_win_pct = round(mean(posteam_score > defteam_score, na.rm = TRUE), 3),
+      .groups = 'drop'
+    )
+  
+  # Add after coach records calculation in Step 2.5:
+message("Diagnosing coach records duplicates...")
+coach_dupes <- coach_records %>%
+  group_by(coach) %>%
+  filter(n() > 1)
+
+print("Number of duplicate coach record rows:")
+print(nrow(coach_dupes))
+if(nrow(coach_dupes) > 0) {
+  print("Sample of duplicates:")
+  print(head(coach_dupes))
+}
+  
+ message("Step 2.6/7: Processing coach tenure...")
+# Calculate coach tenure - modify this section
+coach_tenure <- play_year %>%
+    select(game_date, home_team, away_team, home_coach, away_coach) %>%
+    # Get unique games first
+    distinct() %>%
+    pivot_longer(
+      cols = c(home_coach, away_coach),
+      names_to = "role",
+      values_to = "coach"
+    ) %>%
+    mutate(team = if_else(role == "home_coach", home_team, away_team)) %>%
+    # Get first appearance for each coach-team combo
+    group_by(coach, team) %>%
+    summarize(
+      first_appearance = min(game_date),
+      .groups = 'drop'
+    )
+
+# Calculate tenure for each game - modify this section
+game_tenure <- play_year %>%
+    select(game_id, game_date, posteam, home_team, away_team, home_coach, away_coach) %>%
+    # Get unique game-team combinations
+    distinct() %>%
+    mutate(
+      coach = ifelse(posteam == home_team, home_coach, away_coach)
+    ) %>%
+    left_join(coach_tenure, by = c("coach", "posteam" = "team")) %>%
+    mutate(
+      tenure_days = as.numeric(as.Date(game_date) - as.Date(first_appearance))
+    )
+  
+  # Add after game tenure calculation in Step 2.6:
+message("Diagnosing game tenure duplicates...")
+tenure_dupes <- game_tenure %>%
+  group_by(game_id, posteam, coach) %>%
+  filter(n() > 1)
+
+print("Number of duplicate tenure rows:")
+print(nrow(tenure_dupes))
+if(nrow(tenure_dupes) > 0) {
+  print("Sample of duplicates:")
+  print(head(tenure_dupes))
+}
+
+# Add after the game tenure diagnostic check:
+if(nrow(tenure_dupes) > 0) {
+    print("Detailed look at tenure duplicates:")
+    print(
+        tenure_dupes %>%
+        arrange(game_id, posteam, coach) %>%
+        select(game_id, game_date, posteam, coach, first_appearance, tenure_days) %>%
+        head(10)
+    )
+    
+    # Count frequency of duplications
+    print("Number of duplicates per game/team/coach combination:")
+    print(
+        tenure_dupes %>%
+        group_by(game_id, posteam, coach) %>%
+        summarise(n = n(), .groups = 'drop') %>%
+        count(n) %>%
+        arrange(desc(n))
+    )
+}
+
+
+  
+  message("Step 2.7/7: Processing formation and defensive tendencies...")
+  # Formation tendencies by down
+  formation_tendencies <- play_year %>%
+    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+    filter(play_type %in% c("pass", "run")) %>%
+    group_by(posteam, down) %>%
+    summarize(
+      total_formation_plays = sum(!is.na(offense_formation)),
+      
+      # Formation usage rates
+      shotgun_rate = ifelse(total_formation_plays > 0,
+                           sum(offense_formation == "SHOTGUN", na.rm = TRUE) / total_formation_plays, 0),
+      singleback_rate = ifelse(total_formation_plays > 0,
+                              sum(offense_formation == "SINGLEBACK", na.rm = TRUE) / total_formation_plays, 0),
+      empty_rate = ifelse(total_formation_plays > 0,
+                         sum(offense_formation == "EMPTY", na.rm = TRUE) / total_formation_plays, 0),
+      iform_rate = ifelse(total_formation_plays > 0,
+                         sum(offense_formation == "I_FORM", na.rm = TRUE) / total_formation_plays, 0),
+      pistol_rate = ifelse(total_formation_plays > 0,
+                          sum(offense_formation == "PISTOL", na.rm = TRUE) / total_formation_plays, 0),
+      wildcat_rate = ifelse(total_formation_plays > 0,
+                           sum(offense_formation == "WILDCAT", na.rm = TRUE) / total_formation_plays, 0),
+      jumbo_rate = ifelse(total_formation_plays > 0,
+                         sum(offense_formation == "JUMBO", na.rm = TRUE) / total_formation_plays, 0),
+      
+      # Calculate success rates for each formation
+      shotgun_success = mean(first_down[offense_formation == "SHOTGUN"], na.rm = TRUE),
+      singleback_success = mean(first_down[offense_formation == "SINGLEBACK"], na.rm = TRUE),
+      empty_success = mean(first_down[offense_formation == "EMPTY"], na.rm = TRUE),
+      iform_success = mean(first_down[offense_formation == "I_FORM"], na.rm = TRUE),
+      pistol_success = mean(first_down[offense_formation == "PISTOL"], na.rm = TRUE),
+      wildcat_success = mean(first_down[offense_formation == "WILDCAT"], na.rm = TRUE),
+      jumbo_success = mean(first_down[offense_formation == "JUMBO"], na.rm = TRUE),
+      .groups = 'drop'
+    )
+
+  # Defense tendencies by down
+  defense_tendencies <- play_year %>%
+    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+    filter(play_type %in% c("pass", "run")) %>%
+    group_by(defteam, down) %>%
+    summarize(
+      avg_pass_rushers = mean(number_of_pass_rushers, na.rm = TRUE),
+      avg_box_defenders = mean(defenders_in_box, na.rm = TRUE),
+      
+      # Coverage type rates - using all known types
+      total_coverage_plays = sum(!is.na(defense_coverage_type)),
+      cover0_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_0", na.rm = TRUE) / total_coverage_plays, 0),
+      cover1_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_1", na.rm = TRUE) / total_coverage_plays, 0),
+      cover2_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_2", na.rm = TRUE) / total_coverage_plays, 0),
+      cover3_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_3", na.rm = TRUE) / total_coverage_plays, 0),
+      cover4_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_4", na.rm = TRUE) / total_coverage_plays, 0),
+      cover6_rate = ifelse(total_coverage_plays > 0, 
+                          sum(defense_coverage_type == "COVER_6", na.rm = TRUE) / total_coverage_plays, 0),
+      two_man_rate = ifelse(total_coverage_plays > 0, 
+                           sum(defense_coverage_type == "2_MAN", na.rm = TRUE) / total_coverage_plays, 0),
+      prevent_rate = ifelse(total_coverage_plays > 0, 
+                           sum(defense_coverage_type == "PREVENT", na.rm = TRUE) / total_coverage_plays, 0),
+      .groups = 'drop'
+    )
+
+  # Coverage tendencies by down
+  coverage_tendencies <- play_year %>%
+    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+    filter(play_type %in% c("pass", "run")) %>%
+    group_by(defteam, down, defense_coverage_type) %>%
+    summarize(
+      coverage_plays = n(),
+      coverage_success_rate = mean(first_down == 0, na.rm = TRUE),  # defense success = stop
+      .groups = 'drop'
+    ) %>%
+    group_by(defteam, down) %>%
+    mutate(
+      coverage_usage_rate = coverage_plays / sum(coverage_plays)
+    ) %>%
+    ungroup()
+  
+  
 message("Step 3/7: Processing third and fourth downs...")
   third_downs <- play_year %>%
     filter(down == 3) %>%
@@ -715,7 +934,19 @@ message("Step 3/7: Processing third and fourth downs...")
         )
     })
 
-  message("Step 6/7: Processing model data...")
+  message("Step 5.9/7: Debugging data structures section...")
+
+
+# Add fixed down values since all third downs have down=3
+third_downs$down <- 3
+fourth_downs$down <- 4
+
+
+  
+message("Step 6 Diagnostics: Checking key data structures and columns...")
+
+
+
   model_3rd <- third_downs %>%
     mutate(
       play_type_clean = case_when(
@@ -752,6 +983,56 @@ left_join(prev_stats, by = c("defteam", "week")) %>%
     ) %>%
     ungroup()
 
+  
+  # Add before returning the models in process_year:
+  model_3rd <- model_3rd %>%
+    left_join(coach_records, by = c("posteam_coach" = "coach")) %>%
+    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam")) %>%
+    left_join(game_tenure %>% 
+                select(game_id, posteam, coach, tenure_days), 
+              by = c("game_id", "posteam", "posteam_coach" = "coach")) %>%
+    left_join(formation_tendencies %>% 
+                filter(down == 3), 
+              by = c("posteam", "down")) %>%
+    left_join(defense_tendencies %>% 
+                filter(down == 3), 
+              by = c("defteam", "down")) %>%
+    left_join(coverage_tendencies %>% 
+                filter(down == 3), 
+              by = c("defteam", "defense_coverage_type"))
+
+  model_4th <- model_4th %>%
+    left_join(coach_records, by = c("posteam_coach" = "coach")) %>%
+    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam")) %>%
+    left_join(game_tenure %>% 
+                select(game_id, posteam, coach, tenure_days), 
+              by = c("game_id", "posteam", "posteam_coach" = "coach")) %>%
+    left_join(formation_tendencies %>% 
+                filter(down == 4), 
+              by = c("posteam", "down")) %>%
+    left_join(defense_tendencies %>% 
+                filter(down == 4), 
+              by = c("defteam", "down")) %>%
+    left_join(coverage_tendencies %>% 
+                filter(down == 4), 
+              by = c("defteam", "defense_coverage_type"))
+  
+  # Add after final model joins in Step 6:
+message("Diagnosing final model duplicates...")
+model_4th_dupes <- model_4th %>%
+  group_by(play_id, game_id) %>%
+  filter(n() > 1)
+
+print("Number of duplicate rows in final fourth down model:")
+print(nrow(model_4th_dupes))
+if(nrow(model_4th_dupes) > 0) {
+  print("Sample of duplicates with key columns:")
+  print(model_4th_dupes %>% 
+        select(play_id, game_id, posteam, defteam, offense_formation, defense_coverage_type) %>%
+        head())
+}
+  
+  
   message("Step 7/7: Adding specialists...")
   specialists <- get_specialists(year)
 
