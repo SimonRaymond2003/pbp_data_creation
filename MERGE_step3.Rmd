@@ -241,10 +241,70 @@ player_yearly_lookup3 <- ypff_stats[, {
 cat("\nDone!")
 
 # Write results
-fwrite(player_yearly_lookup, "player_yearly_lookup3.csv.gz")
+fwrite(player_yearly_lookup3, "player_yearly_lookup3.csv.gz")
 ```
 
 
+```{r}
+library(data.table)
+ypff_stats <- fread("ypff_stats.csv.gz")
+
+# More robust column type identification
+numeric_cols <- names(ypff_stats)[sapply(ypff_stats, function(x) {
+  is.numeric(x) || is.integer(x) || is.logical(x)
+})]
+numeric_cols <- setdiff(numeric_cols, c("player_id", "year"))
+
+character_cols <- names(ypff_stats)[sapply(ypff_stats, is.character)]
+
+# Convert all numeric-like columns to numeric
+for(col in numeric_cols) {
+  ypff_stats[, (col) := as.numeric(get(col))]
+}
+
+get_mode <- function(x) {
+  if (length(x) == 0) return(NA)
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+cat("Calculating 3-year lookback player statistics...\n")
+total_players <- uniqueN(ypff_stats$player_id)
+
+player_yearly_lookup3 <- ypff_stats[, {
+  player_num <- which(sort(unique(ypff_stats$player_id)) == .BY$player_id)
+  cat(sprintf("\rProcessing Player %d/%d", player_num, total_players))
+  
+  all_years <- unique(ypff_stats$year)
+  results <- lapply(all_years, function(current_year) {
+    prev_stats <- .SD[year < current_year][order(-year)][1:3]
+    
+    if(nrow(prev_stats) == 0) {
+      avg_stats <- as.data.table(lapply(numeric_cols, function(x) NA_real_))
+      setnames(avg_stats, numeric_cols)
+      char_stats <- as.data.table(lapply(character_cols, function(x) NA_character_))
+      setnames(char_stats, character_cols)
+    } else {
+      avg_stats <- prev_stats[, lapply(.SD, function(x) if(all(is.na(x))) NA_real_ else mean(x, na.rm = TRUE)), 
+                             .SDcols = numeric_cols]
+      char_stats <- prev_stats[, lapply(.SD, get_mode), .SDcols = character_cols]
+    }
+    
+    cbind(
+      data.table(
+        year = current_year,
+        years_found = nrow(prev_stats),
+        missing_years = 3 - nrow(prev_stats)
+      ),
+      avg_stats,
+      char_stats
+    )
+  })
+  rbindlist(results)
+}, by = player_id]
+
+fwrite(player_yearly_lookup3, "player_yearly_lookup3.csv.gz")
+```
 
 
 

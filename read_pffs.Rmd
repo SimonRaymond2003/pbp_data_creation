@@ -465,43 +465,72 @@ get_unique_players <- function() {
 ```
 
 ```{r}
+# Function to add prefix to column names except for specific columns
+add_prefix_to_columns <- function(df, prefix) {
+  # Columns to exclude from prefixing
+  exclude_cols <- c("player_id", "player", "team", "year", "week")
+  
+  # Get current column names
+  col_names <- colnames(df)
+  
+  # Create new column names with prefix, excluding specified columns
+  new_names <- ifelse(col_names %in% exclude_cols,
+                     col_names,
+                     paste0(prefix, "_", col_names))
+  
+  # Set new column names
+  colnames(df) <- new_names
+  return(df)
+}
+
+# Modified bind_rows with prefix for each report type
+process_report <- function(all_pff_data, pattern, prefix) {
+  report_dfs <- Filter(function(x) grepl(pattern, names(all_pff_data)), all_pff_data)
+  if(length(report_dfs) > 0) {
+    combined_df <- bind_rows(report_dfs)
+    return(add_prefix_to_columns(combined_df, prefix))
+  }
+  return(NULL)
+}
+
+# Process all reports with prefixes
 # Blocking reports
-blocking_grades <- bind_rows(Filter(function(x) grepl("blocking_grades_", names(all_pff_data)), all_pff_data))
-run_blocking <- bind_rows(Filter(function(x) grepl("run_blocking_", names(all_pff_data)), all_pff_data))
-pass_blocking <- bind_rows(Filter(function(x) grepl("pass_blocking_", names(all_pff_data)), all_pff_data))
+blocking_grades <- process_report(all_pff_data, "blocking_grades_", "blocking_grades")
+run_blocking <- process_report(all_pff_data, "run_blocking_", "run_blocking")
+pass_blocking <- process_report(all_pff_data, "pass_blocking_", "pass_blocking")
 
 # Defense reports 
-coverage_grades <- bind_rows(Filter(function(x) grepl("coverage_grades_", names(all_pff_data)), all_pff_data))
-coverage_schemes <- bind_rows(Filter(function(x) grepl("coverage_schemes_", names(all_pff_data)), all_pff_data))
-defensive_grades <- bind_rows(Filter(function(x) grepl("defensive_grades_", names(all_pff_data)), all_pff_data))
-pass_rush_grades <- bind_rows(Filter(function(x) grepl("pass_rush_grades_", names(all_pff_data)), all_pff_data))
-pass_rushing_productivity <- bind_rows(Filter(function(x) grepl("pass_rushing_productivity_", names(all_pff_data)), all_pff_data))
-run_defense_grades <- bind_rows(Filter(function(x) grepl("run_defense_grades_", names(all_pff_data)), all_pff_data))
-slot_coverage <- bind_rows(Filter(function(x) grepl("slot_coverage_", names(all_pff_data)), all_pff_data))
+coverage_grades <- process_report(all_pff_data, "coverage_grades_", "coverage_grades")
+coverage_schemes <- process_report(all_pff_data, "coverage_schemes_", "coverage_schemes")
+defensive_grades <- process_report(all_pff_data, "defensive_grades_", "defensive_grades")
+pass_rush_grades <- process_report(all_pff_data, "pass_rush_grades_", "pass_rush_grades")
+pass_rushing_productivity <- process_report(all_pff_data, "pass_rushing_productivity_", "pass_rushing_productivity")
+run_defense_grades <- process_report(all_pff_data, "run_defense_grades_", "run_defense_grades")
+slot_coverage <- process_report(all_pff_data, "slot_coverage_", "slot_coverage")
 
 # Passing reports
-allowed_pressure <- bind_rows(Filter(function(x) grepl("allowed_pressure_", names(all_pff_data)), all_pff_data))
-passing_concept <- bind_rows(Filter(function(x) grepl("passing_concept_", names(all_pff_data)), all_pff_data))
-passing_depth <- bind_rows(Filter(function(x) grepl("passing_depth_", names(all_pff_data)), all_pff_data))
-passing_grades <- bind_rows(Filter(function(x) grepl("passing_grades_", names(all_pff_data)), all_pff_data))
-passing_pressure <- bind_rows(Filter(function(x) grepl("passing_pressure_", names(all_pff_data)), all_pff_data))
-time_in_pocket <- bind_rows(Filter(function(x) grepl("time_in_pocket_", names(all_pff_data)), all_pff_data))
+allowed_pressure <- process_report(all_pff_data, "allowed_pressure_", "allowed_pressure")
+passing_concept <- process_report(all_pff_data, "passing_concept_", "passing_concept")
+passing_depth <- process_report(all_pff_data, "passing_depth_", "passing_depth")
+passing_grades <- process_report(all_pff_data, "passing_grades_", "passing_grades")
+passing_pressure <- process_report(all_pff_data, "passing_pressure_", "passing_pressure")
+time_in_pocket <- process_report(all_pff_data, "time_in_pocket_", "time_in_pocket")
 
 # Receiving reports
-receiving_concept <- bind_rows(Filter(function(x) grepl("receiving_concept_", names(all_pff_data)), all_pff_data))
-receiving_depth <- bind_rows(Filter(function(x) grepl("receiving_depth_", names(all_pff_data)), all_pff_data))
-receiving_grades <- bind_rows(Filter(function(x) grepl("receiving_grades_", names(all_pff_data)), all_pff_data))
-receiving_vs_scheme <- bind_rows(Filter(function(x) grepl("receiving_vs_scheme_", names(all_pff_data)), all_pff_data))
+receiving_concept <- process_report(all_pff_data, "receiving_concept_", "receiving_concept")
+receiving_depth <- process_report(all_pff_data, "receiving_depth_", "receiving_depth")
+receiving_grades <- process_report(all_pff_data, "receiving_grades_", "receiving_grades")
+receiving_vs_scheme <- process_report(all_pff_data, "receiving_vs_scheme_", "receiving_vs_scheme")
 
 # Rushing reports
-rushing_grades <- bind_rows(Filter(function(x) grepl("rushing_grades_", names(all_pff_data)), all_pff_data))
+rushing_grades <- process_report(all_pff_data, "rushing_grades_", "rushing_grades")
 
 # Special Teams reports
-field_goals_grades <- bind_rows(Filter(function(x) grepl("field_goals_grades_", names(all_pff_data)), all_pff_data))
-kickoff_and_punt_return_grades <- bind_rows(Filter(function(x) grepl("kickoff_and_punt_return_grades_", names(all_pff_data)), all_pff_data))
-kickoff_grades <- bind_rows(Filter(function(x) grepl("kickoff_grades_", names(all_pff_data)), all_pff_data))
-punting_grades <- bind_rows(Filter(function(x) grepl("punting_grades_", names(all_pff_data)), all_pff_data))
-special_teams_grades <- bind_rows(Filter(function(x) grepl("special_teams_grades_", names(all_pff_data)), all_pff_data))
+field_goals_grades <- process_report(all_pff_data, "field_goals_grades_", "field_goals_grades")
+kickoff_and_punt_return_grades <- process_report(all_pff_data, "kickoff_and_punt_return_grades_", "kickoff_and_punt_return_grades")
+kickoff_grades <- process_report(all_pff_data, "kickoff_grades_", "kickoff_grades")
+punting_grades <- process_report(all_pff_data, "punting_grades_", "punting_grades")
+special_teams_grades <- process_report(all_pff_data, "special_teams_grades_", "special_teams_grades")
 ```
 
 
@@ -531,12 +560,7 @@ library(data.table)
 fwrite(pff_stats, "pff_stats.csv.gz", compress="gzip")
 ```
 
-# viewing pff stats
 
-first row to 100th row
-```{r}
-r1 <- pff_stats[1:10000, ]
-```
 
 # cleaning 
 

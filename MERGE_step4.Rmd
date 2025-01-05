@@ -59,6 +59,46 @@ get_pff_ids <- function(row, final_key) {
   return(pff_ids)
 }
 
+get_pff_ids <- function(row, final_key) {
+  offense_cols <- paste0("offense_player_", 1:11)
+  defense_cols <- paste0("defense_player_", 1:11)
+  
+  row_list <- as.list(row)
+  
+  # Get the IDs and roles together
+  gsis_ids <- c(
+    sapply(offense_cols, function(col) row_list[[col]]),
+    sapply(defense_cols, function(col) row_list[[col]])
+  )
+  
+  roles <- c(
+    rep("offense", 11),
+    rep("defense", 11)
+  )
+  
+  # Add kicker and punter only if they exist
+  if(!is.null(row_list$kicker_id)) {
+    gsis_ids <- c(gsis_ids, row_list$kicker_id)
+    roles <- c(roles, "k")
+  }
+  
+  if(!is.null(row_list$punter_id)) {
+    gsis_ids <- c(gsis_ids, row_list$punter_id)
+    roles <- c(roles, "p")
+  }
+  
+  # Filter out NAs and get corresponding roles
+  valid_idx <- !is.na(gsis_ids)
+  gsis_ids <- gsis_ids[valid_idx]
+  roles <- roles[valid_idx]
+  
+  # Get PFF IDs
+  pff_ids <- final_key[match(gsis_ids, gsis_id)]$pff_id
+  names(pff_ids) <- paste0(roles, "_", seq_along(roles))
+  
+  return(pff_ids)
+}
+
 # Initial PFF ID mapping
 cat("Mapping player IDs...\n")
 cfd_with_pff <- copy(cfd)
@@ -104,10 +144,10 @@ merge_player_stats <- function(cfd_dt, player_stats_dt, role, number, stats_cols
   result <- player_stats_dt[
     cfd_dt[, .(temp_key, 
                player_id = get(pff_col), 
-               year = season.x, 
-               week = week.x)],
+               year = season, 
+               week = week)],
     on = .(player_id, year, week),
-    .(temp_key, block_percent, man_tackles, snap_counts_offense)
+    .(temp_key, receiving_grades_receptions, coverage_grades_grades_coverage_defense, rushing_grades_attempts)
   ]
   
   # Add the new columns to original data
@@ -127,7 +167,9 @@ process_all_players <- function(cfd_with_pff, player_stats_lookup) {
   setDT(cfd_with_pff)
   setDT(player_stats_lookup)
   
-  stats_cols <- c("block_percent", "man_tackles", "snap_counts_offense")
+  stats_cols <- c("receiving_grades_receptions", 
+                  "coverage_grades_grades_coverage_defense", 
+                  "rushing_grades_attempts")
   
   # Process offensive players (1-11)
   for(i in 1:11) {
@@ -153,7 +195,50 @@ process_all_players(cfd_with_pff, player_stats_lookup)
 
 ```{r}
 # Container for columns we want to get from player_stats_lookup
-cols_to_get <- c("block_percent", "man_tackles", "snap_counts_offense")
+cols_to_get <- c("passing_grades_yards", "receiving_grades_receptions", "defensive_grades_tackles")
+
+cols_to_get <- c(
+  # Passing Grades
+  "passing_grades_yards",
+  "passing_grades_touchdowns",
+  "passing_grades_interceptions",
+  "passing_grades_grades_pass",
+  
+  # Receiving Grades
+  "receiving_grades_receptions",
+  "receiving_grades_yards",
+  "receiving_grades_targets",
+  
+  # Defensive Grades
+  "defensive_grades_grades_coverage_defense",
+  "defensive_grades_tackles",
+  "defensive_grades_targets",
+  "defensive_grades_interceptions",
+  "defensive_grades_pass_break_ups",
+  "defensive_grades_missed_tackles",
+  "defensive_grades_hits",
+  "defensive_grades_sacks",
+  "defensive_grades_stops",
+  
+  # Blocking Grades
+  "blocking_grades_grades_run_block",
+  "blocking_grades_grades_pass_block",
+  "blocking_grades_hurries",
+  "blocking_grades_hits_allowed",
+  "blocking_grades_sacks_allowed",
+  
+  # Rushing Grades
+  "rushing_grades_attempts",
+  "rushing_grades_yards",
+  "rushing_grades_grades_run",
+  "rushing_grades_yards_after_contact",
+  
+  # Special Teams Grades
+  "special_teams_grades_grades_misc_st",
+  "special_teams_grades_grades_punter",
+  "special_teams_grades_grades_kickoff_kicker",
+  "special_teams_grades_grades_fgep_kicker"
+)
 
 # Function to process a single column efficiently
 merge_player_stats <- function(cfd_dt, player_stats_dt, role, number, stats_cols) {
@@ -181,8 +266,8 @@ merge_player_stats <- function(cfd_dt, player_stats_dt, role, number, stats_cols
   result <- player_stats_dt[
     cfd_dt[, .(temp_key, 
                player_id = get(pff_col), 
-               year = season.x, 
-               week = week.x)],
+               year = season, 
+               week = week)],
     on = .(player_id, year, week),
     nomatch=NA
   ][, c("temp_key", ..stats_cols), with=FALSE]
