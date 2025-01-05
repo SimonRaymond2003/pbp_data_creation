@@ -14,19 +14,14 @@ library(data.table)
 # Read data files
 final_key <- fread("final_key.csv")
 cfd <- fread("cfd.csv")
-```
-
-
-```{r}
+ctd <- fread("ctd.csv") 
 pff_stats <- fread("pff_stats.csv.gz")
-```
-
-
-```{r}
 player_stats_lookup <- fread("player_stats_lookup.csv.gz")
 
 ```
 
+
+# CFD
 
 ```{r}
 # Map GSIS IDs to PFF IDs
@@ -117,81 +112,6 @@ player_cols <- c(
 )
 ```
 
-```{r}
-# Function to process a single column efficiently
-merge_player_stats <- function(cfd_dt, player_stats_dt, role, number, stats_cols) {
-  # Print progress
-  cat(sprintf("\nProcessing %s %d", role, number))
-  
-  # Get the PFF ID column name based on role and position
-  pff_col <- if(role == "offense") {
-    paste0("offense_", number)
-  } else if(role == "defense") {
-    paste0("defense_", number)  # numbers 12-22 for defense
-  } else if(role == "k") {
-    "k_23"  # kicker is 23
-  } else if(role == "p") {
-    "p_24"  # punter is 24
-  }
-  
-  # Create new column names for stats
-  new_cols <- paste0(role, "_player_", number, "_", stats_cols)
-  
-  # Create a temporary key for joining
-  cfd_dt[, temp_key := .I]
-  
-  # Do the merge using the mapped PFF IDs directly
-  result <- player_stats_dt[
-    cfd_dt[, .(temp_key, 
-               player_id = get(pff_col), 
-               year = season, 
-               week = week)],
-    on = .(player_id, year, week),
-    .(temp_key, receiving_grades_receptions, coverage_grades_grades_coverage_defense, rushing_grades_attempts)
-  ]
-  
-  # Add the new columns to original data
-  for(i in seq_along(stats_cols)) {
-    set(cfd_dt, 
-        i = result$temp_key,
-        j = new_cols[i],
-        value = result[[stats_cols[i]]])
-  }
-  
-  # Remove temporary key
-  cfd_dt[, temp_key := NULL]
-}
-
-# Main processing function
-process_all_players <- function(cfd_with_pff, player_stats_lookup) {
-  setDT(cfd_with_pff)
-  setDT(player_stats_lookup)
-  
-  stats_cols <- c("receiving_grades_receptions", 
-                  "coverage_grades_grades_coverage_defense", 
-                  "rushing_grades_attempts")
-  
-  # Process offensive players (1-11)
-  for(i in 1:11) {
-    merge_player_stats(cfd_with_pff, player_stats_lookup, "offense", i, stats_cols)
-  }
-  
-  # Process defensive players (12-22)
-  for(i in 12:22) {
-    merge_player_stats(cfd_with_pff, player_stats_lookup, "defense", i, stats_cols)
-  }
-  
-  # Process kicker (23) and punter (24)
-  merge_player_stats(cfd_with_pff, player_stats_lookup, "k", 23, stats_cols)
-  merge_player_stats(cfd_with_pff, player_stats_lookup, "p", 24, stats_cols)
-  
-  cat("\nProcessing complete!\n")
-}
-
-# Run the processing
-process_all_players(cfd_with_pff, player_stats_lookup)
-```
-
 
 ```{r}
 # Container for columns we want to get from player_stats_lookup
@@ -223,7 +143,6 @@ cols_to_get <- c(
   # Blocking Grades
   "blocking_grades_grades_run_block",
   "blocking_grades_grades_pass_block",
-  "blocking_grades_hurries",
   "blocking_grades_hits_allowed",
   "blocking_grades_sacks_allowed",
   
@@ -304,19 +223,180 @@ process_all_players <- function(cfd_with_pff, player_stats_lookup, cols_to_get) 
 }
 
 # Run the processing and save to merged_data
-merged_data <- process_all_players(cfd_with_pff, player_stats_lookup, cols_to_get)
+merged_data_cfd <- process_all_players(cfd_with_pff, player_stats_lookup, cols_to_get)
 ```
 
 write to a csv gz file
 ```{r}
-fwrite(merged_data, "merged_data.csv.gz")
+fwrite(merged_data_cfd, "merged_data_cfd.csv.gz")
 ```
 
-read the merged data
-```{r}
-merged_data <- fread("merged_data.csv.gz")
-```
+# CTD
 
 ```{r}
-test <- merged_data[10000:10100, ]
+# Function to map GSIS IDs to PFF IDs
+get_pff_ids <- function(row, final_key) {
+  offense_cols <- paste0("offense_player_", 1:11)
+  defense_cols <- paste0("defense_player_", 1:11)
+  
+  row_list <- as.list(row)
+  
+  # Get the IDs and roles together
+  gsis_ids <- c(
+    sapply(offense_cols, function(col) row_list[[col]]),
+    sapply(defense_cols, function(col) row_list[[col]])
+  )
+  
+  roles <- c(
+    rep("offense", 11),
+    rep("defense", 11)
+  )
+  
+  # Add kicker and punter only if they exist
+  if(!is.null(row_list$kicker_id)) {
+    gsis_ids <- c(gsis_ids, row_list$kicker_id)
+    roles <- c(roles, "k")
+  }
+  
+  if(!is.null(row_list$punter_id)) {
+    gsis_ids <- c(gsis_ids, row_list$punter_id)
+    roles <- c(roles, "p")
+  }
+  
+  # Filter out NAs and get corresponding roles
+  valid_idx <- !is.na(gsis_ids)
+  gsis_ids <- gsis_ids[valid_idx]
+  roles <- roles[valid_idx]
+  
+  # Get PFF IDs
+  pff_ids <- final_key[match(gsis_ids, gsis_id)]$pff_id
+  names(pff_ids) <- paste0(roles, "_", seq_along(roles))
+  
+  return(pff_ids)
+}
+
+# Initial PFF ID mapping for third down data
+cat("Mapping player IDs for third down plays...\n")
+ctd_with_pff <- copy(ctd)
+mapped_ids <- do.call(rbind, lapply(1:nrow(ctd), function(i) {
+  if(i %% 1000 == 0) cat(sprintf("\rProcessing row %d of %d (%.1f%%)", i, nrow(ctd), i/nrow(ctd)*100))
+  get_pff_ids(ctd[i,], final_key)
+}))
+ctd_with_pff <- cbind(ctd_with_pff, as.data.table(mapped_ids))
 ```
+
+
+```{r}
+# Columns we want to get from player_stats_lookup
+cols_to_get <- c(
+  # Passing Grades
+  "passing_grades_yards",
+  "passing_grades_touchdowns",
+  "passing_grades_interceptions",
+  "passing_grades_grades_pass",
+  
+  # Receiving Grades
+  "receiving_grades_receptions",
+  "receiving_grades_yards",
+  "receiving_grades_targets",
+  
+  # Defensive Grades
+  "defensive_grades_grades_coverage_defense",
+  "defensive_grades_tackles",
+  "defensive_grades_targets",
+  "defensive_grades_interceptions",
+  "defensive_grades_pass_break_ups",
+  "defensive_grades_missed_tackles",
+  "defensive_grades_hits",
+  "defensive_grades_sacks",
+  "defensive_grades_stops",
+  
+  # Blocking Grades
+  "blocking_grades_grades_run_block",
+  "blocking_grades_grades_pass_block",
+  "blocking_grades_hits_allowed",
+  "blocking_grades_sacks_allowed",
+  
+  # Rushing Grades
+  "rushing_grades_attempts",
+  "rushing_grades_yards",
+  "rushing_grades_grades_run",
+  "rushing_grades_yards_after_contact",
+  
+  # Special Teams Grades
+  "special_teams_grades_grades_misc_st",
+  "special_teams_grades_grades_punter",
+  "special_teams_grades_grades_kickoff_kicker",
+  "special_teams_grades_grades_fgep_kicker"
+)
+
+# Function to merge player stats for a single position
+merge_player_stats <- function(ctd_dt, player_stats_dt, role, number, stats_cols) {
+  # Print progress
+  cat(sprintf("\nProcessing %s %d", role, number))
+  
+  # Get the PFF ID column name based on role and position
+  pff_col <- if(role == "offense") {
+    paste0("offense_", number)
+  } else if(role == "defense") {
+    paste0("defense_", number)
+  } else if(role == "k") {
+    "k_23"
+  } else if(role == "p") {
+    "p_24"
+  }
+  
+  # Create new column names for stats
+  new_cols <- paste0(role, "_player_", number, "_", stats_cols)
+  
+  # Create a temporary key for joining
+  ctd_dt[, temp_key := .I]
+  
+  # Do the merge using the mapped PFF IDs directly
+  result <- player_stats_dt[
+    ctd_dt[, .(temp_key, 
+               player_id = get(pff_col), 
+               year = season, 
+               week = week)],
+    on = .(player_id, year, week),
+    nomatch=NA
+  ][, c("temp_key", ..stats_cols), with=FALSE]
+  
+  # Add the new columns to original data
+  for(i in seq_along(stats_cols)) {
+    ctd_dt[, (new_cols[i]) := result[[stats_cols[i]]]]
+  }
+}
+
+# Main processing function for all players
+process_all_players <- function(ctd_with_pff, player_stats_lookup, cols_to_get) {
+  # Create copy for merged data
+  merged_data <- copy(ctd_with_pff)
+  setDT(merged_data)
+  setDT(player_stats_lookup)
+  
+  # Process offensive players (1-11)
+  for(i in 1:11) {
+    merge_player_stats(merged_data, player_stats_lookup, "offense", i, cols_to_get)
+  }
+  
+  # Process defensive players (12-22)
+  for(i in 12:22) {
+    merge_player_stats(merged_data, player_stats_lookup, "defense", i, cols_to_get)
+  }
+  
+  # Process kicker (23) and punter (24)
+  merge_player_stats(merged_data, player_stats_lookup, "k", 23, cols_to_get)
+  merge_player_stats(merged_data, player_stats_lookup, "p", 24, cols_to_get)
+  
+  cat("\nProcessing complete!\n")
+  return(merged_data)
+}
+
+# Run the processing
+merged_data_ctd <- process_all_players(ctd_with_pff, player_stats_lookup, cols_to_get)
+
+# Write to a csv gz file
+fwrite(merged_data_ctd, "merged_data_ctd.csv.gz")
+```
+
