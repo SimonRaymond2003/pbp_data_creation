@@ -1095,30 +1095,73 @@ write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
 write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
 ```
 
-
-next is coaches
-
 ```{r}
 library(readr)
-#combined_third_downs <- read.csv("ctd.csv")
-#combined_fourth_downs <- read.csv("cfd.csv")
+library(dplyr)
+combined_third_downs <- read.csv("ctd.csv")
+combined_fourth_downs <- read.csv("cfd.csv")
 ```
 
+# filter out weeks with no info on who was on the field
 
-# Explinations and proofs
+get the rows in cfd and ctd that have a na in either offense_players or defense_players
 
-offense_player_1_days_since_injury       # Days since last injury for player 
+```{r}
+# Get counts before filtering by season and week
+before_counts_third <- combined_third_downs %>%
+  group_by(season, week) %>%
+  summarise(count_before = n())
 
-offense_player_1_current_status         # Most recent game status (Questionable/Doubtful/Out/NA)
-offense_player_1_current_practice       # Most recent practice status (Limited/DNP/Full/NA)
+before_counts_fourth <- combined_fourth_downs %>%
+  group_by(season, week) %>%
+  summarise(count_before = n())
 
-these look 1 week back
+# Filter and get counts after by season and week
+after_counts_third <- combined_third_downs %>%
+  filter(!is.na(offense_players) & !is.na(defense_players)) %>%
+  group_by(season, week) %>%
+  summarise(count_after = n())
 
-offense_player_1_week_questionable      # Number of times listed as "Questionable" on injury report
-offense_player_1_week_doubtful          # Number of times listed as "Doubtful" on injury report  
-offense_player_1_week_out               # Number of times listed as "Out" on injury report
-offense_player_1_week_limited_practice  # Number of times had "Limited Participation in Practice" 
-offense_player_1_week_dnp               # Number of times "Did Not Participate in Practice"
+after_counts_fourth <- combined_fourth_downs %>%
+  filter(!is.na(offense_players) & !is.na(defense_players)) %>%
+  group_by(season, week) %>%
+  summarise(count_after = n())
+
+# Compare before and after for third downs
+lost_rows_third <- before_counts_third %>%
+  left_join(after_counts_third, by = c("season", "week")) %>%
+  mutate(rows_lost = count_before - count_after) %>%
+  filter(rows_lost > 0) %>%
+  arrange(season, week)
+
+# Compare before and after for fourth downs
+lost_rows_fourth <- before_counts_fourth %>%
+  left_join(after_counts_fourth, by = c("season", "week")) %>%
+  mutate(rows_lost = count_before - count_after) %>%
+  filter(rows_lost > 0) %>%
+  arrange(season, week)
+
+# Print results
+cat("Third Downs - Lost Rows by Season and Week:\n")
+print(lost_rows_third)
+
+cat("\nFourth Downs - Lost Rows by Season and Week:\n")
+print(lost_rows_fourth)
+
+# Print totals
+cat("\nTotal rows removed from Third Downs:", sum(lost_rows_third$rows_lost))
+cat("\nTotal rows removed from Fourth Downs:", sum(lost_rows_fourth$rows_lost))
+
+
+
+# Filter out rows with missing player information
+combined_third_downs <- combined_third_downs %>%
+  filter(!is.na(offense_players) & !is.na(defense_players))
+
+combined_fourth_downs <- combined_fourth_downs %>%
+  filter(!is.na(offense_players) & !is.na(defense_players))
+```
+
 
 
 
@@ -1127,8 +1170,6 @@ offense_player_1_week_dnp               # Number of times "Did Not Participate i
 ```{r}
 attempts_4th <- combined_fourth_downs %>%
   filter(rush_attempt == 1 | pass_attempt == 1)
-
-
 ```
 
 ```{r}
@@ -1168,4 +1209,67 @@ removed_plays <- attempts_4th %>%
 head(removed_plays)
 ```
 
+
+check in the desc column if the word put or field goal insensitive to caps is present then kill it
+
+```{r}
+# Filter out plays with "punt" or "field goal" in the description
+clean_attempts_4th <- clean_attempts_4th %>%
+  filter(!grepl("punt", desc, ignore.case = TRUE) & !grepl("field goal", desc, ignore.case = TRUE))
+```
+
+write to cafd
+```{r}
+write.csv(clean_attempts_4th, "cafd.csv", row.names = FALSE)
+```
+
+
+# the gsis id problem
+
+get the players and k and p gsis ids then the offense and defense id cols so 26 cols in total into there own df with desc so 27 cols.. we will use 3rd down for just now
+
+```{r}
+# Read the combined third downs data
+combined_third_downs <- read.csv("ctd.csv")
+
+# Create vector of column names we want to keep
+id_columns <- c(
+  "desc",
+  "offense_players",
+  "defense_players",
+  "kicker_id",
+  "punter_id",
+  paste0("offense_player_", 1:11),
+  paste0("defense_player_", 1:11)
+)
+
+# Create the check_ids dataframe
+check_ids <- combined_third_downs[, id_columns]
+
+# Print some summary information
+cat("Dimensions of check_ids:", dim(check_ids), "\n")
+cat("Column names:", colnames(check_ids), "\n")
+
+# Check for NA values in each column
+na_counts <- sapply(check_ids, function(x) sum(is.na(x)))
+print("NA counts per column:")
+print(na_counts)
+```
+
+
+now count how many values offense_players and defense_players have in them
+
+```{r}
+str(check_ids)
+
+```
+
+
+```{r}
+check_ids <- check_ids %>%
+  mutate(
+    off_count = sapply(strsplit(offense_players, ";"), length),
+    def_count = sapply(strsplit(defense_players, ";"), length)
+  )
+```
 
