@@ -500,7 +500,7 @@ if(nrow(tenure_dupes) > 0) {
   
   
 message("Step 3/7: Processing third and fourth downs...")
-  third_downs <- play_year %>%
+third_downs <- play_year %>%
     filter(down == 3) %>%
     select(
       play_id,
@@ -532,12 +532,22 @@ message("Step 3/7: Processing third and fourth downs...")
       wind,
       drive,
       drive_start_transition,
-      posteam_type
+      posteam_type,
+      vegas_wp,
+      vegas_wpa,
+      total_line,
+      spread_line
     ) %>%
     mutate(
       score_diff = posteam_score - defteam_score,
       posteam_coach = ifelse(posteam == home_team, home_coach, away_coach),
-      season = year
+      season = year,
+      # Adjust spread_line based on posteam
+      spread_line = case_when(
+        posteam == home_team ~ spread_line,
+        posteam == away_team ~ -1 * spread_line,
+        TRUE ~ NA_real_
+      )
     ) %>%
     filter(!field_goal_attempt, !punt_attempt, play_type %in% c("pass", "run")) %>%
     mutate(converted = first_down) %>%
@@ -545,7 +555,7 @@ message("Step 3/7: Processing third and fourth downs...")
     left_join(participation_data, 
               by = c("game_id" = "nflverse_game_id", "play_id" = "play_id"))
 
-  fourth_downs <- play_year %>%
+fourth_downs <- play_year %>%
     filter(down == 4) %>%
     select(
       play_id,
@@ -577,13 +587,23 @@ message("Step 3/7: Processing third and fourth downs...")
       wind,
       drive,
       drive_start_transition,
-      posteam_type
+      posteam_type,
+      vegas_wp,
+      vegas_wpa,
+      total_line,
+      spread_line
     ) %>%
     mutate(
       score_diff = posteam_score - defteam_score,
       posteam_coach = ifelse(posteam == home_team, home_coach, away_coach),
       attempt = if_else(play_type %in% c("punt", "field_goal"), 0, 1),
-      season = year
+      season = year,
+      # Adjust spread_line based on posteam
+      spread_line = case_when(
+        posteam == home_team ~ spread_line,
+        posteam == away_team ~ -1 * spread_line,
+        TRUE ~ NA_real_
+      )
     ) %>%
     left_join(participation_data, 
               by = c("game_id" = "nflverse_game_id", "play_id" = "play_id"))
@@ -604,127 +624,106 @@ message("Step 3/7: Processing third and fourth downs...")
     fourth_downs[[paste0("defense_player_", i)]] <- NA_character_
   }
   
-  # Function to assign players to positions
-  assign_players_to_positions <- function(players_data, roster_data, is_offense = TRUE) {
-    # Initialize empty slots
-    player_slots <- rep(NA_character_, 11)
-    
-    # Skip if empty player data
-    if(is.null(players_data) || players_data == "") {
-      return(player_slots)
-    }
-    
-    # Get player ids from semicolon-separated string
-    player_ids <- unlist(strsplit(players_data, ";"))
-    if(length(player_ids) == 0) {
-      return(player_slots)
-    }
-    
-    # Get player positions from roster data
-    players_info <- roster_data %>%
-      filter(gsis_id %in% player_ids) %>%
-      select(gsis_id, depth_chart_position)
-    
-    if(nrow(players_info) == 0) {
-      return(player_slots)
-    }
-    
-    # First check for special teams
-    st_players <- players_info %>%
-      filter(depth_chart_position %in% c("P", "K", "LS"))
-    if(nrow(st_players) > 0) {
-      player_slots[1:min(11, nrow(st_players))] <- st_players$gsis_id[1:min(11, nrow(st_players))]
-      return(player_slots)
-    }
-    
-    # If offense
-    if(is_offense) {
-      # QB first
-      qbs <- players_info %>% filter(depth_chart_position == "QB")
-      if(nrow(qbs) > 0) player_slots[1] <- qbs$gsis_id[1]
-      
-      # RB/FB next
-      backs <- players_info %>% filter(depth_chart_position %in% c("RB", "FB"))
-      if(nrow(backs) > 0) {
-        for(i in 1:min(2, nrow(backs))) {
-          player_slots[1 + i] <- backs$gsis_id[i]
-        }
-      }
-      
-      # WR next
-      wrs <- players_info %>% filter(depth_chart_position == "WR")
-      wr_start <- if(nrow(backs) >= 2) 4 else 3
-      if(nrow(wrs) > 0 && wr_start <= 11) {
-        for(i in 1:min(11 - wr_start + 1, nrow(wrs))) {
-          player_slots[wr_start + i - 1] <- wrs$gsis_id[i]
-        }
-      }
-      
-      # Find next empty slot
-      next_empty <- which(is.na(player_slots))
-      if(length(next_empty) > 0) {
-        next_slot <- min(next_empty)
-        
-        # TE next
-        tes <- players_info %>% filter(depth_chart_position == "TE")
-        if(nrow(tes) > 0 && next_slot <= 11) {
-          player_slots[next_slot] <- tes$gsis_id[1]
-          next_slot <- next_slot + 1
-        }
-        
-        # O-line last
-        oline <- players_info %>% 
-          filter(depth_chart_position %in% c("T", "G", "C", "OT", "OG"))
-        if(nrow(oline) > 0 && next_slot <= 11) {
-          for(i in 1:min(11 - next_slot + 1, nrow(oline))) {
-            player_slots[next_slot + i - 1] <- oline$gsis_id[i]
-          }
-        }
-      }
-    } else {
-      # Defense
-      # D-line first
-      dline <- players_info %>% 
-        filter(depth_chart_position %in% c("DE", "DT", "NT", "DL"))
-      if(nrow(dline) > 0) {
-        for(i in 1:min(3, nrow(dline))) {
-          player_slots[i] <- dline$gsis_id[i]
-        }
-      }
-      
-      # Find next empty slot
-      next_empty <- which(is.na(player_slots))
-      if(length(next_empty) > 0) {
-        next_slot <- min(next_empty)
-        
-        # Linebackers next
-        lbs <- players_info %>% 
-          filter(depth_chart_position %in% c("MLB", "ILB", "OLB", "LB"))
-        if(nrow(lbs) > 0 && next_slot <= 11) {
-          for(i in 1:min(11 - next_slot + 1, nrow(lbs))) {
-            player_slots[next_slot + i - 1] <- lbs$gsis_id[i]
-          }
-        }
-        
-        # Find next empty slot again
-        next_empty <- which(is.na(player_slots))
-        if(length(next_empty) > 0) {
-          next_slot <- min(next_empty)
-          
-          # Secondary last
-          secondary <- players_info %>% 
-            filter(depth_chart_position %in% c("S", "FS", "SS", "SAF", "CB", "DB"))
-          if(nrow(secondary) > 0 && next_slot <= 11) {
-            for(i in 1:min(11 - next_slot + 1, nrow(secondary))) {
-              player_slots[next_slot + i - 1] <- secondary$gsis_id[i]
-            }
-          }
-        }
-      }
-    }
-    
+# Updated position groupings with OTHER category
+OFFENSE_POSITIONS <- list(
+  ST = c("K", "P", "LS"),
+  QB = "QB",
+  BACKS = c("RB", "FB"),
+  WR = "WR",
+  TE = "TE", 
+  OL = c("T", "G", "C", "OT", "OG"),
+  OTHER = "OTHER"  # Catchall category
+)
+
+DEFENSE_POSITIONS <- list(
+  ST = c("K", "P", "LS"),
+  DL = c("DE", "DT", "NT", "DL"),
+  LB = c("MLB", "ILB", "OLB", "LB"),
+  DB = c("S", "FS", "SS", "SAF", "CB", "DB"),
+  OTHER = "OTHER"  # Catchall category
+)
+
+assign_players_to_positions <- function(players_data, roster_data, is_offense = TRUE) {
+  # Initialize empty slots
+  player_slots <- rep(NA_character_, 11)
+  next_slot <- 1
+  
+  # Skip if empty player data
+  if(is.null(players_data) || players_data == "" || next_slot > 11) {
     return(player_slots)
   }
+  
+  # Get player ids from semicolon-separated string and count them
+  player_ids <- unlist(strsplit(players_data, ";"))
+  expected_players <- length(player_ids)
+  
+  if(expected_players == 0) {
+    return(player_slots)
+  }
+  
+  # Get player positions from roster data
+  players_info <- roster_data %>%
+    filter(gsis_id %in% player_ids) %>%
+    select(gsis_id, depth_chart_position)
+  
+  if(nrow(players_info) == 0) {
+    return(player_slots)
+  }
+  
+  # Helper function to assign players of a position group
+  assign_position_group <- function(position_group) {
+    players <- players_info %>%
+      filter(depth_chart_position %in% position_group)
+    
+    if(nrow(players) > 0 && next_slot <= 11) {
+      slots_to_fill <- min(nrow(players), 12 - next_slot)
+      player_slots[next_slot:(next_slot + slots_to_fill - 1)] <<- players$gsis_id[1:slots_to_fill]
+      next_slot <<- next_slot + slots_to_fill
+    }
+  }
+  
+  # First handle special teams players
+  assign_position_group(c("K", "P", "LS"))
+  
+  # Process regular position groups
+  position_groups <- if(is_offense) OFFENSE_POSITIONS else DEFENSE_POSITIONS
+  for(group in position_groups[!names(position_groups) %in% c("OTHER", "ST")]) {
+    if(next_slot <= 11) {
+      assign_position_group(group)
+    } else {
+      break
+    }
+  }
+  
+  # Fill any remaining slots with unassigned player IDs
+  if(next_slot <= 11) {
+    # Get all player IDs that haven't been assigned yet
+    assigned_ids <- player_slots[!is.na(player_slots)]
+    unassigned_ids <- setdiff(player_ids, assigned_ids)
+    
+    if(length(unassigned_ids) > 0) {
+      slots_left <- 12 - next_slot
+      ids_to_add <- min(length(unassigned_ids), slots_left)
+      player_slots[next_slot:(next_slot + ids_to_add - 1)] <- unassigned_ids[1:ids_to_add]
+    }
+  }
+  
+  # Verify we've used as many players as possible
+  actual_players <- sum(!is.na(player_slots))
+  if(actual_players < min(expected_players, 11)) {
+    # If we have fewer players than expected and slots available,
+    # fill remaining slots with any unused IDs
+    unused_ids <- setdiff(player_ids, player_slots[!is.na(player_slots)])
+    remaining_slots <- which(is.na(player_slots))
+    
+    if(length(unused_ids) > 0 && length(remaining_slots) > 0) {
+      slots_to_fill <- min(length(unused_ids), length(remaining_slots))
+      player_slots[remaining_slots[1:slots_to_fill]] <- unused_ids[1:slots_to_fill]
+    }
+  }
+  
+  return(player_slots)
+}
   
   # Apply position assignments to third downs
   message("  Processing third downs...")
@@ -1089,22 +1088,47 @@ combined_fourth_downs <- bind_rows(
 )
 ```
 
-```{r}
-# Save results
-write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
-write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
-```
 
-```{r}
-library(readr)
-library(dplyr)
-combined_third_downs <- read.csv("ctd.csv")
-combined_fourth_downs <- read.csv("cfd.csv")
-```
 
 # filter out weeks with no info on who was on the field
 
 get the rows in cfd and ctd that have a na in either offense_players or defense_players
+```{r}
+# Function to get max regular season week based on year
+get_max_regular_season_week <- function(year) {
+  if (year >= 2021) {
+    return(18)  # 17-game season starting in 2021
+  } else {
+    return(17)  # 16-game season before 2021
+  }
+}
+
+# Filter out playoff games from combined datasets
+combined_third_downs <- combined_third_downs %>%
+  filter(
+    (season < 2021 & week <= 17) |  # Pre-2021 seasons
+    (season >= 2021 & week <= 18)    # 2021 and later seasons
+  )
+
+combined_fourth_downs <- combined_fourth_downs %>%
+  filter(
+    (season < 2021 & week <= 17) |  # Pre-2021 seasons
+    (season >= 2021 & week <= 18)    # 2021 and later seasons
+  )
+
+# Verify the filtering worked
+print("Third downs week range by season:")
+print(combined_third_downs %>% 
+  group_by(season) %>% 
+  summarise(min_week = min(week), max_week = max(week)))
+
+print("\nFourth downs week range by season:")
+print(combined_fourth_downs %>% 
+  group_by(season) %>% 
+  summarise(min_week = min(week), max_week = max(week)))
+```
+
+
 
 ```{r}
 # Get counts before filtering by season and week
@@ -1163,6 +1187,20 @@ combined_fourth_downs <- combined_fourth_downs %>%
 ```
 
 
+
+
+```{r}
+# Save results
+write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
+write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
+```
+
+```{r}
+library(readr)
+library(dplyr)
+combined_third_downs <- read.csv("ctd.csv")
+combined_fourth_downs <- read.csv("cfd.csv")
+```
 
 
 
@@ -1234,6 +1272,7 @@ combined_third_downs <- read.csv("ctd.csv")
 
 # Create vector of column names we want to keep
 id_columns <- c(
+  "game_id",
   "desc",
   "offense_players",
   "defense_players",
@@ -1272,4 +1311,9 @@ check_ids <- check_ids %>%
     def_count = sapply(strsplit(defense_players, ";"), length)
   )
 ```
+
+the 12s on def are heavily carolina
+
+THE TUSH PUSH EAGLES NEED TO DIE
+
 
