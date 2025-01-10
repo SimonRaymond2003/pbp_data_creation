@@ -1187,6 +1187,43 @@ combined_fourth_downs <- combined_fourth_downs %>%
 ```
 
 
+```{r}
+# Revised add_attendance function
+add_attendance <- function(pbp_df, attendance_df) {
+  pbp_df %>%
+    left_join(
+      # Reshape attendance data to long format for joining
+      attendance_df %>%
+        pivot_longer(
+          cols = matches("^Week\\d+$"),  # Match Week followed by digits
+          names_to = "week_label",
+          values_to = "attendance"
+        ) %>%
+        # Extract week number, accounting for no space after "Week"
+        mutate(
+          week = as.numeric(gsub("Week", "", week_label)),
+          home_attendance = attendance
+        ) %>%
+        select(Team, Year, week, home_attendance),
+      # Join conditions
+      by = c(
+        "home_team" = "Team",
+        "season" = "Year",
+        "week" = "week"
+      )
+    )
+}
+
+# Apply to your pbp datasets
+combined_third_downs <- add_attendance(combined_third_downs, attendance_data)
+combined_fourth_downs <- add_attendance(combined_fourth_downs, attendance_data)
+
+# Verify the join worked
+print("Number of NA attendance values in third downs:")
+print(sum(is.na(combined_third_downs$home_attendance)))
+print("\nNumber of NA attendance values in fourth downs:")
+print(sum(is.na(combined_fourth_downs$home_attendance)))
+```
 
 
 ```{r}
