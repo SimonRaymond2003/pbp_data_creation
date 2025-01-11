@@ -31,7 +31,6 @@ validate_data <- function(df) {
   return(df)
 }
 
-
 # Get specialists function
 get_specialists <- function(year) {
   pbp <- bind_rows(
@@ -828,7 +827,7 @@ assign_players_to_positions <- function(players_data, roster_data, is_offense = 
                                    paste0("defense_player_", i), 
                                    paste0("defense_player_", i))
   }
-
+  
   message("Step 5/7: Processing team injury data...")
   third_downs <- third_downs %>%
     mutate(defteam = ifelse(posteam == home_team, away_team, home_team)) %>%
@@ -1072,7 +1071,7 @@ if(nrow(model_4th_dupes) > 0) {
 
 ```{r}
 # Main processing
-years <- 2016:2023
+years <- 2017#2016:2023
 all_data <- list()
 
 for(year in years) {
@@ -1187,7 +1186,11 @@ combined_fourth_downs <- combined_fourth_downs %>%
 ```
 
 
+
+
 ```{r}
+# Read the attendance data
+attendance_data <- read.csv("nfl_attendance_2016_2023.csv")
 # Revised add_attendance function
 add_attendance <- function(pbp_df, attendance_df) {
   pbp_df %>%
@@ -1195,13 +1198,13 @@ add_attendance <- function(pbp_df, attendance_df) {
       # Reshape attendance data to long format for joining
       attendance_df %>%
         pivot_longer(
-          cols = matches("^Week\\d+$"),  # Match Week followed by digits
+          cols = starts_with("Week."),  # Match Week. columns
           names_to = "week_label",
           values_to = "attendance"
         ) %>%
-        # Extract week number, accounting for no space after "Week"
+        # Extract week number, accounting for the dot
         mutate(
-          week = as.numeric(gsub("Week", "", week_label)),
+          week = as.numeric(gsub("Week\\.", "", week_label)),
           home_attendance = attendance
         ) %>%
         select(Team, Year, week, home_attendance),
@@ -1227,10 +1230,290 @@ print(sum(is.na(combined_fourth_downs$home_attendance)))
 
 
 ```{r}
+library(nflreadr)
+library(tidyverse)
+library(slider)
+
+# Create season-aware team mapping function
+team_name_mapping <- function(team, season) {
+  case_when(
+    # Chargers: SD -> LAC in 2017
+    team == "LAC" & season < 2017 ~ "SD",
+    team == "SD" & season >= 2017 ~ "LAC",
+    # Rams: STL/SL -> LA in 2016
+    team %in% c("LA", "SL") & season < 2016 ~ "STL",
+    team == "STL" & season >= 2016 ~ "LA",
+    # Raiders: OAK -> LV in 2020
+    team == "LV" & season < 2020 ~ "OAK",
+    team == "OAK" & season >= 2020 ~ "LV",
+    # Other historical fixes
+    team == "ARZ" ~ "ARI",
+    team == "BLT" ~ "BAL",
+    team == "CLV" ~ "CLE",
+    team == "HST" ~ "HOU",
+    # If no mapping needed, return original
+    TRUE ~ team
+  )
+}
+
+# Process roster data for team changes
+player_team_changes <- load_rosters_weekly(seasons = 2015:2023) %>%
+  filter(
+    (season < 2021 & week <= 17) |  
+    (season >= 2021 & week <= 18)    
+  ) %>%
+  mutate(
+    team = map2_chr(team, season, team_name_mapping)
+  ) %>%
+  select(player_id = gsis_id, team, season, week) %>%
+  group_by(player_id, season, week) %>%
+  slice_tail(n = 1) %>%
+  ungroup() %>%
+  arrange(player_id, season, week) %>%
+  group_by(player_id) %>%
+  mutate(
+    prev_team = lag(team),
+    prev_season = lag(season),
+    prev_week = lag(week)
+  ) %>%
+  filter(team != prev_team, !is.na(prev_team)) %>%
+  # Remove relocations
+  filter(!(
+    # Rams relocation
+    (prev_team == "STL" & team == "LA" & prev_season == 2015 & season == 2016) |
+    # Chargers relocation
+    (prev_team == "SD" & team == "LAC" & prev_season == 2016 & season == 2017) |
+    # Raiders relocation
+    (prev_team == "OAK" & team == "LV" & prev_season == 2019 & season == 2020)
+  )) %>%
+  select(
+    player_id,
+    season_from = prev_season,
+    week_from = prev_week,
+    season_to = season,
+    week_to = week,
+    old_team = prev_team,
+    new_team = team
+  ) %>%
+  ungroup()
+
+# Load and process games data
+games_data <- load_schedules(seasons = 2013:2023) %>%
+  filter(game_type == "REG") %>%
+  mutate(
+    home_team = map2_chr(home_team, season, team_name_mapping),
+    away_team = map2_chr(away_team, season, team_name_mapping)
+  )
+
+# Create team-level data with wins
+team_games <- bind_rows(
+  # Home games
+  games_data %>%
+    select(season, week, team = home_team, opponent = away_team, 
+           team_score = home_score, opp_score = away_score) %>%
+    mutate(win = case_when(
+      team_score > opp_score ~ 1,
+      team_score < opp_score ~ 0,
+      TRUE ~ 0.5  # ties count as half win
+    )),
+  # Away games  
+  games_data %>%
+    select(season, week, team = away_team, opponent = home_team, 
+           team_score = away_score, opp_score = home_score) %>%
+    mutate(win = case_when(
+      team_score > opp_score ~ 1,
+      team_score < opp_score ~ 0,
+      TRUE ~ 0.5
+    ))
+) %>%
+  arrange(season, week, team)
+
+# Calculate rolling wins for each team
+team_rolling_wins <- team_games %>%
+  group_by(team) %>%
+  arrange(season, week) %>%
+  mutate(
+    wins_last_18 = slide_sum(win, before = 17, after = 0)
+  ) %>%
+  ungroup()
+
+# Final join
+player_team_changes_with_wins <- player_team_changes %>%
+  left_join(
+    team_rolling_wins %>% 
+      select(season, week, team, wins_last_18),
+    by = c(
+      "season_from" = "season",
+      "week_from" = "week",
+      "old_team" = "team"
+    )
+  ) %>%
+  # Optionally rename the wins column to be more descriptive
+  rename(old_team_wins_last_18 = wins_last_18)
+```
+
+```{r}
+library(zoo)
+# Create a complete season-week grid for each player
+player_weeks <- load_rosters_weekly(seasons = 2015:2023) %>%
+  select(player_id = gsis_id, season) %>%
+  distinct() %>%
+  # Create all possible weeks for each player-season
+  crossing(
+    week = 1:max(
+      if_else(season < 2021, 17, 18)
+    )
+  ) %>%
+  arrange(player_id, season, week)
+
+# Join with roster data to get team information
+player_status <- load_rosters_weekly(seasons = 2015:2023) %>%
+  filter(
+    (season < 2021 & week <= 17) |  
+    (season >= 2021 & week <= 18)    
+  ) %>%
+  mutate(
+    team = map2_chr(team, season, team_name_mapping)
+  ) %>%
+  select(player_id = gsis_id, team, season, week) %>%
+  # Get latest team status for each week
+  group_by(player_id, season, week) %>%
+  slice_tail(n = 1) %>%
+  ungroup() %>%
+  right_join(player_weeks, by = c("player_id", "season", "week")) %>%
+  arrange(player_id, season, week) %>%
+  group_by(player_id) %>%
+  # Fill in team status for weeks between changes
+  fill(team, .direction = "down") %>%
+  # Create sequential week number starting from 2015
+  mutate(
+    sequential_week = case_when(
+      season == 2015 ~ week,
+      season == 2016 ~ week + 17,
+      season == 2017 ~ week + 34,
+      season == 2018 ~ week + 51,
+      season == 2019 ~ week + 68,
+      season == 2020 ~ week + 85,
+      season == 2021 ~ week + 102,
+      season == 2022 ~ week + 120,
+      season == 2023 ~ week + 138
+    ),
+    prev_team = lag(team),
+    team_switch = team != prev_team & !is.na(prev_team),
+    # Find the most recent switch week for each row
+    last_switch_week = lag(if_else(team_switch, sequential_week, NA_real_)),
+    last_switch_week = na.locf(last_switch_week, na.rm = FALSE),
+    # Calculate weeks since most recent switch
+    weeks_since_switch = if_else(
+      is.na(last_switch_week),
+      0,  # For players with no prior switches
+      sequential_week - last_switch_week
+    )
+  ) %>%
+  ungroup()
+
+# Join with team performance data
+final_player_status <- player_status %>%
+  left_join(
+    team_rolling_wins %>% 
+      select(season, week, team, wins_last_18),
+    by = c("season", "week", "team")
+  ) %>%
+  group_by(player_id) %>%
+  mutate(
+    # Create temp columns for team switch info
+    temp_old_team = if_else(team_switch, prev_team, NA_character_),
+    temp_old_wins = if_else(team_switch, lag(wins_last_18), NA_real_),
+    # Carry forward these values until next switch
+    old_team = na.locf(temp_old_team, na.rm = FALSE),
+    old_team_wins = na.locf(temp_old_wins, na.rm = FALSE)
+  ) %>%
+  ungroup() %>%
+  # Clean up and select final columns
+  select(
+    player_id,
+    season,
+    week,
+    current_team = team,
+    old_team,
+    team_switch,
+    weeks_since_switch,
+    current_team_wins = wins_last_18,
+    old_team_wins
+  )
+```
+
+
+```{r}
+library(rlang)
+
+add_switch_info <- function(pbp_data, switch_data) {
+  # For each player column (offense 1-11, defense 1-11, kicker, punter)
+  result <- pbp_data
+  
+  # Add kicker and punter info
+  if("kicker_id" %in% names(result)) {
+    result <- result %>%
+      left_join(
+        switch_data %>% 
+          select(player_id, season, week, weeks_since_switch, old_team, old_team_wins),
+        by = c("kicker_id" = "player_id", "season", "week"),
+        suffix = c("", "_kicker")
+      )
+  }
+  
+  if("punter_id" %in% names(result)) {
+    result <- result %>%
+      left_join(
+        switch_data %>% 
+          select(player_id, season, week, weeks_since_switch, old_team, old_team_wins),
+        by = c("punter_id" = "player_id", "season", "week"),
+        suffix = c("", "_punter")
+      )
+  }
+  
+  # Process offensive players
+  for(i in 1:11) {
+    player_col <- paste0("offense_player_", i)
+    join_by <- setNames(c("player_id", "season", "week"), c(player_col, "season", "week"))
+    result <- result %>%
+      left_join(
+        switch_data %>% 
+          select(player_id, season, week, weeks_since_switch, old_team, old_team_wins),
+        by = join_by,
+        suffix = c("", paste0("_o", i))
+      )
+  }
+  
+  # Process defensive players
+  for(i in 1:11) {
+    player_col <- paste0("defense_player_", i)
+    join_by <- setNames(c("player_id", "season", "week"), c(player_col, "season", "week"))
+    result <- result %>%
+      left_join(
+        switch_data %>% 
+          select(player_id, season, week, weeks_since_switch, old_team, old_team_wins),
+        by = join_by,
+        suffix = c("", paste0("_d", i))
+      )
+  }
+  
+  return(result)
+}
+
+# Apply to both datasets
+combined_third_downs<- add_switch_info(combined_third_downs, final_player_status)
+combined_fourth_downs <- add_switch_info(combined_fourth_downs, final_player_status)
+```
+
+```{r}
 # Save results
 write.csv(combined_third_downs, "ctd.csv", row.names = FALSE)
 write.csv(combined_fourth_downs, "cfd.csv", row.names = FALSE)
 ```
+
+
+
 
 ```{r}
 library(readr)
@@ -1352,5 +1635,7 @@ check_ids <- check_ids %>%
 the 12s on def are heavily carolina
 
 THE TUSH PUSH EAGLES NEED TO DIE
+
+
 
 
