@@ -415,88 +415,270 @@ if(nrow(tenure_dupes) > 0) {
 
 
   
-  message("Step 2.7/7: Processing formation and defensive tendencies...")
-  # Formation tendencies by down
-  formation_tendencies <- play_year %>%
-    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
-    filter(play_type %in% c("pass", "run")) %>%
-    group_by(posteam, down) %>%
-    summarize(
-      total_formation_plays = sum(!is.na(offense_formation)),
-      
-      # Formation usage rates
-      shotgun_rate = ifelse(total_formation_plays > 0,
-                           sum(offense_formation == "SHOTGUN", na.rm = TRUE) / total_formation_plays, 0),
-      singleback_rate = ifelse(total_formation_plays > 0,
-                              sum(offense_formation == "SINGLEBACK", na.rm = TRUE) / total_formation_plays, 0),
-      empty_rate = ifelse(total_formation_plays > 0,
-                         sum(offense_formation == "EMPTY", na.rm = TRUE) / total_formation_plays, 0),
-      iform_rate = ifelse(total_formation_plays > 0,
-                         sum(offense_formation == "I_FORM", na.rm = TRUE) / total_formation_plays, 0),
-      pistol_rate = ifelse(total_formation_plays > 0,
-                          sum(offense_formation == "PISTOL", na.rm = TRUE) / total_formation_plays, 0),
-      wildcat_rate = ifelse(total_formation_plays > 0,
-                           sum(offense_formation == "WILDCAT", na.rm = TRUE) / total_formation_plays, 0),
-      jumbo_rate = ifelse(total_formation_plays > 0,
-                         sum(offense_formation == "JUMBO", na.rm = TRUE) / total_formation_plays, 0),
-      
-      # Calculate success rates for each formation
-      shotgun_success = mean(first_down[offense_formation == "SHOTGUN"], na.rm = TRUE),
-      singleback_success = mean(first_down[offense_formation == "SINGLEBACK"], na.rm = TRUE),
-      empty_success = mean(first_down[offense_formation == "EMPTY"], na.rm = TRUE),
-      iform_success = mean(first_down[offense_formation == "I_FORM"], na.rm = TRUE),
-      pistol_success = mean(first_down[offense_formation == "PISTOL"], na.rm = TRUE),
-      wildcat_success = mean(first_down[offense_formation == "WILDCAT"], na.rm = TRUE),
-      jumbo_success = mean(first_down[offense_formation == "JUMBO"], na.rm = TRUE),
-      .groups = 'drop'
-    )
+message("Step 2.7/7: Processing formation, defensive tendencies, and coverage rates...")
 
-  # Defense tendencies by down
-  defense_tendencies <- play_year %>%
-    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
-    filter(play_type %in% c("pass", "run")) %>%
-    group_by(defteam, down) %>%
-    summarize(
-      avg_pass_rushers = mean(number_of_pass_rushers, na.rm = TRUE),
-      avg_box_defenders = mean(defenders_in_box, na.rm = TRUE),
-      
-      # Coverage type rates - using all known types
-      total_coverage_plays = sum(!is.na(defense_coverage_type)),
-      cover0_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_0", na.rm = TRUE) / total_coverage_plays, 0),
-      cover1_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_1", na.rm = TRUE) / total_coverage_plays, 0),
-      cover2_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_2", na.rm = TRUE) / total_coverage_plays, 0),
-      cover3_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_3", na.rm = TRUE) / total_coverage_plays, 0),
-      cover4_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_4", na.rm = TRUE) / total_coverage_plays, 0),
-      cover6_rate = ifelse(total_coverage_plays > 0, 
-                          sum(defense_coverage_type == "COVER_6", na.rm = TRUE) / total_coverage_plays, 0),
-      two_man_rate = ifelse(total_coverage_plays > 0, 
-                           sum(defense_coverage_type == "2_MAN", na.rm = TRUE) / total_coverage_plays, 0),
-      prevent_rate = ifelse(total_coverage_plays > 0, 
-                           sum(defense_coverage_type == "PREVENT", na.rm = TRUE) / total_coverage_plays, 0),
-      .groups = 'drop'
-    )
+# Formation tendencies by down with rolling calculations
+message("  Processing formation tendencies...")
+formation_tendencies <- play_year %>%
+  left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+  filter(play_type %in% c("pass", "run")) %>%
+  arrange(posteam, week) %>%
+  group_by(posteam, week, down) %>%
+  summarize(
+    weekly_formation_plays = sum(!is.na(offense_formation)),
+    weekly_shotgun = sum(offense_formation == "SHOTGUN", na.rm = TRUE),
+    weekly_singleback = sum(offense_formation == "SINGLEBACK", na.rm = TRUE),
+    weekly_empty = sum(offense_formation == "EMPTY", na.rm = TRUE),
+    weekly_iform = sum(offense_formation == "I_FORM", na.rm = TRUE),
+    weekly_pistol = sum(offense_formation == "PISTOL", na.rm = TRUE),
+    weekly_wildcat = sum(offense_formation == "WILDCAT", na.rm = TRUE),
+    weekly_jumbo = sum(offense_formation == "JUMBO", na.rm = TRUE),
+    
+    # Weekly success counts
+    weekly_shotgun_success = sum(first_down[offense_formation == "SHOTGUN"], na.rm = TRUE),
+    weekly_singleback_success = sum(first_down[offense_formation == "SINGLEBACK"], na.rm = TRUE),
+    weekly_empty_success = sum(first_down[offense_formation == "EMPTY"], na.rm = TRUE),
+    weekly_iform_success = sum(first_down[offense_formation == "I_FORM"], na.rm = TRUE),
+    weekly_pistol_success = sum(first_down[offense_formation == "PISTOL"], na.rm = TRUE),
+    weekly_wildcat_success = sum(first_down[offense_formation == "WILDCAT"], na.rm = TRUE),
+    weekly_jumbo_success = sum(first_down[offense_formation == "JUMBO"], na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  group_by(posteam, down) %>%
+  arrange(week) %>%
+  mutate(across(starts_with("weekly_"), ~replace_na(., 0))) %>%
+  mutate(
+    # Cumulative totals
+    total_formation_plays = cumsum(weekly_formation_plays),
+    
+    # Formation usage rates (rolling)
+    shotgun_rate = cumsum(weekly_shotgun) / total_formation_plays,
+    singleback_rate = cumsum(weekly_singleback) / total_formation_plays,
+    empty_rate = cumsum(weekly_empty) / total_formation_plays,
+    iform_rate = cumsum(weekly_iform) / total_formation_plays,
+    pistol_rate = cumsum(weekly_pistol) / total_formation_plays,
+    wildcat_rate = cumsum(weekly_wildcat) / total_formation_plays,
+    jumbo_rate = cumsum(weekly_jumbo) / total_formation_plays,
+    
+    # Success rates (rolling)
+    shotgun_success = cumsum(weekly_shotgun_success) / cumsum(weekly_shotgun),
+    singleback_success = cumsum(weekly_singleback_success) / cumsum(weekly_singleback),
+    empty_success = cumsum(weekly_empty_success) / cumsum(weekly_empty),
+    iform_success = cumsum(weekly_iform_success) / cumsum(weekly_iform),
+    pistol_success = cumsum(weekly_pistol_success) / cumsum(weekly_pistol),
+    wildcat_success = cumsum(weekly_wildcat_success) / cumsum(weekly_wildcat),
+    jumbo_success = cumsum(weekly_jumbo_success) / cumsum(weekly_jumbo)
+  ) %>%
+  ungroup()
 
-  # Coverage tendencies by down
-  coverage_tendencies <- play_year %>%
-    left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
-    filter(play_type %in% c("pass", "run")) %>%
-    group_by(defteam, down, defense_coverage_type) %>%
-    summarize(
-      coverage_plays = n(),
-      coverage_success_rate = mean(first_down == 0, na.rm = TRUE),  # defense success = stop
-      .groups = 'drop'
-    ) %>%
-    group_by(defteam, down) %>%
-    mutate(
-      coverage_usage_rate = coverage_plays / sum(coverage_plays)
-    ) %>%
-    ungroup()
-  
+# Print diagnostic info for formation tendencies
+message("Formation tendencies summary:")
+print(summary(formation_tendencies))
+message(paste("Number of NA values in formation rates:", 
+             sum(is.na(formation_tendencies$shotgun_rate))))
+
+# Defense tendencies with down-specific stats
+message("  Processing defensive tendencies and stop rates...")
+defense_tendencies <- play_year %>%
+  left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+  filter(play_type %in% c("pass", "run")) %>%
+  arrange(defteam, week) %>%
+  group_by(defteam, week) %>%
+  summarize(
+    # Overall stats
+    weekly_plays = n(),
+    weekly_run_plays = sum(play_type == "run", na.rm = TRUE),
+    weekly_pass_plays = sum(play_type == "pass", na.rm = TRUE),
+    weekly_run_stops = sum(play_type == "run" & !first_down, na.rm = TRUE),
+    weekly_pass_stops = sum(play_type == "pass" & !first_down, na.rm = TRUE),
+    weekly_total_stops = sum(!first_down, na.rm = TRUE),
+    
+    # First down stats
+    weekly_1st_run_plays = sum(play_type == "run" & down == 1, na.rm = TRUE),
+    weekly_1st_pass_plays = sum(play_type == "pass" & down == 1, na.rm = TRUE),
+    weekly_1st_run_stops = sum(play_type == "run" & down == 1 & !first_down, na.rm = TRUE),
+    weekly_1st_pass_stops = sum(play_type == "pass" & down == 1 & !first_down, na.rm = TRUE),
+    
+    # Second down stats
+    weekly_2nd_run_plays = sum(play_type == "run" & down == 2, na.rm = TRUE),
+    weekly_2nd_pass_plays = sum(play_type == "pass" & down == 2, na.rm = TRUE),
+    weekly_2nd_run_stops = sum(play_type == "run" & down == 2 & !first_down, na.rm = TRUE),
+    weekly_2nd_pass_stops = sum(play_type == "pass" & down == 2 & !first_down, na.rm = TRUE),
+    
+    # Third down stats
+    weekly_3rd_run_plays = sum(play_type == "run" & down == 3, na.rm = TRUE),
+    weekly_3rd_pass_plays = sum(play_type == "pass" & down == 3, na.rm = TRUE),
+    weekly_3rd_run_stops = sum(play_type == "run" & down == 3 & !first_down, na.rm = TRUE),
+    weekly_3rd_pass_stops = sum(play_type == "pass" & down == 3 & !first_down, na.rm = TRUE),
+    
+    # Fourth down stats
+    weekly_4th_run_plays = sum(play_type == "run" & down == 4, na.rm = TRUE),
+    weekly_4th_pass_plays = sum(play_type == "pass" & down == 4, na.rm = TRUE),
+    weekly_4th_run_stops = sum(play_type == "run" & down == 4 & !first_down, na.rm = TRUE),
+    weekly_4th_pass_stops = sum(play_type == "pass" & down == 4 & !first_down, na.rm = TRUE),
+    
+    weekly_pass_rushers = mean(number_of_pass_rushers, na.rm = TRUE),
+    weekly_box_defenders = mean(defenders_in_box, na.rm = TRUE),
+    
+    # Coverage type counts
+    weekly_cover0 = sum(defense_coverage_type == "COVER_0", na.rm = TRUE),
+    weekly_cover1 = sum(defense_coverage_type == "COVER_1", na.rm = TRUE),
+    weekly_cover2 = sum(defense_coverage_type == "COVER_2", na.rm = TRUE),
+    weekly_cover3 = sum(defense_coverage_type == "COVER_3", na.rm = TRUE),
+    weekly_cover4 = sum(defense_coverage_type == "COVER_4", na.rm = TRUE),
+    weekly_cover6 = sum(defense_coverage_type == "COVER_6", na.rm = TRUE),
+    weekly_two_man = sum(defense_coverage_type == "2_MAN", na.rm = TRUE),
+    weekly_prevent = sum(defense_coverage_type == "PREVENT", na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  group_by(defteam) %>%
+  arrange(week) %>%
+  mutate(
+    # Overall cumulative stats
+    cum_plays = cumsum(weekly_plays),
+    cum_run_plays = cumsum(weekly_run_plays),
+    cum_pass_plays = cumsum(weekly_pass_plays),
+    cum_run_stops = cumsum(weekly_run_stops),
+    cum_pass_stops = cumsum(weekly_pass_stops),
+    cum_total_stops = cumsum(weekly_total_stops),
+    
+    # First down cumulative stats
+    cum_1st_run_plays = cumsum(weekly_1st_run_plays),
+    cum_1st_pass_plays = cumsum(weekly_1st_pass_plays),
+    cum_1st_run_stops = cumsum(weekly_1st_run_stops),
+    cum_1st_pass_stops = cumsum(weekly_1st_pass_stops),
+    
+    # Second down cumulative stats
+    cum_2nd_run_plays = cumsum(weekly_2nd_run_plays),
+    cum_2nd_pass_plays = cumsum(weekly_2nd_pass_plays),
+    cum_2nd_run_stops = cumsum(weekly_2nd_run_stops),
+    cum_2nd_pass_stops = cumsum(weekly_2nd_pass_stops),
+    
+    # Third down cumulative stats
+    cum_3rd_run_plays = cumsum(weekly_3rd_run_plays),
+    cum_3rd_pass_plays = cumsum(weekly_3rd_pass_plays),
+    cum_3rd_run_stops = cumsum(weekly_3rd_run_stops),
+    cum_3rd_pass_stops = cumsum(weekly_3rd_pass_stops),
+    
+    # Fourth down cumulative stats
+    cum_4th_run_plays = cumsum(weekly_4th_run_plays),
+    cum_4th_pass_plays = cumsum(weekly_4th_pass_plays),
+    cum_4th_run_stops = cumsum(weekly_4th_run_stops),
+    cum_4th_pass_stops = cumsum(weekly_4th_pass_stops),
+    
+    # Overall stop rates with minimum play thresholds
+    def_stop_rate_run = if_else(cum_run_plays >= 5, 
+                               cum_run_stops / cum_run_plays, 
+                               NA_real_),
+    def_stop_rate_pass = if_else(cum_pass_plays >= 5, 
+                                cum_pass_stops / cum_pass_plays, 
+                                NA_real_),
+    def_stop_rate_total = if_else(cum_plays >= 10, 
+                                 cum_total_stops / cum_plays, 
+                                 NA_real_),
+    
+    # First down stop rates
+    def_stop_rate_1st_run = if_else(cum_1st_run_plays >= 5,
+                                   cum_1st_run_stops / cum_1st_run_plays,
+                                   NA_real_),
+    def_stop_rate_1st_pass = if_else(cum_1st_pass_plays >= 5,
+                                    cum_1st_pass_stops / cum_1st_pass_plays,
+                                    NA_real_),
+    
+    # Second down stop rates
+    def_stop_rate_2nd_run = if_else(cum_2nd_run_plays >= 5,
+                                   cum_2nd_run_stops / cum_2nd_run_plays,
+                                   NA_real_),
+    def_stop_rate_2nd_pass = if_else(cum_2nd_pass_plays >= 5,
+                                    cum_2nd_pass_stops / cum_2nd_pass_plays,
+                                    NA_real_),
+    
+    # Third down stop rates
+    def_stop_rate_3rd_run = if_else(cum_3rd_run_plays >= 5,
+                                   cum_3rd_run_stops / cum_3rd_run_plays,
+                                   NA_real_),
+    def_stop_rate_3rd_pass = if_else(cum_3rd_pass_plays >= 5,
+                                    cum_3rd_pass_stops / cum_3rd_pass_plays,
+                                    NA_real_),
+    
+    # Fourth down stop rates
+    def_stop_rate_4th_run = if_else(cum_4th_run_plays >= 5,
+                                   cum_4th_run_stops / cum_4th_run_plays,
+                                   NA_real_),
+    def_stop_rate_4th_pass = if_else(cum_4th_pass_plays >= 5,
+                                    cum_4th_pass_stops / cum_4th_pass_plays,
+                                    NA_real_),
+    
+    # Rolling averages for continuous metrics
+    avg_pass_rushers = cummean(weekly_pass_rushers),
+    avg_box_defenders = cummean(weekly_box_defenders),
+    
+    # Coverage rates
+    cover0_rate = cumsum(weekly_cover0) / cum_plays,
+    cover1_rate = cumsum(weekly_cover1) / cum_plays,
+    cover2_rate = cumsum(weekly_cover2) / cum_plays,
+    cover3_rate = cumsum(weekly_cover3) / cum_plays,
+    cover4_rate = cumsum(weekly_cover4) / cum_plays,
+    cover6_rate = cumsum(weekly_cover6) / cum_plays,
+    two_man_rate = cumsum(weekly_two_man) / cum_plays,
+    prevent_rate = cumsum(weekly_prevent) / cum_plays
+  ) %>%
+  ungroup()
+
+# Print diagnostic info for defense tendencies
+message("Defense tendencies summary:")
+print(summary(defense_tendencies))
+message(paste("Number of NA values in stop rates:",
+             sum(is.na(defense_tendencies$def_stop_rate_total))))
+
+# Coverage-specific stop rates
+message("  Processing coverage-specific stop rates...")
+coverage_tendencies <- play_year %>%
+  left_join(participation_data, by = c("game_id" = "nflverse_game_id", "play_id")) %>%
+  filter(play_type %in% c("pass", "run")) %>%
+  arrange(defteam, week) %>%
+  group_by(defteam, week, defense_coverage_type, down) %>%
+  summarize(
+    weekly_plays = n(),
+    weekly_stops = sum(!first_down, na.rm = TRUE),
+    weekly_run_plays = sum(play_type == "run", na.rm = TRUE),
+    weekly_pass_plays = sum(play_type == "pass", na.rm = TRUE),
+    weekly_run_stops = sum(play_type == "run" & !first_down, na.rm = TRUE),
+    weekly_pass_stops = sum(play_type == "pass" & !first_down, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  group_by(defteam, defense_coverage_type, down) %>%
+  arrange(week) %>%
+  mutate(across(starts_with("weekly_"), ~replace_na(., 0))) %>%
+  mutate(
+    cum_plays = cumsum(weekly_plays),
+    cum_stops = cumsum(weekly_stops),
+    cum_run_plays = cumsum(weekly_run_plays),
+    cum_pass_plays = cumsum(weekly_pass_plays),
+    cum_run_stops = cumsum(weekly_run_stops),
+    cum_pass_stops = cumsum(weekly_pass_stops),
+    
+    # Calculate stop rates with minimum play thresholds
+    coverage_stop_rate = if_else(cum_plays >= 10,
+                                cum_stops / cum_plays,
+                                NA_real_),
+    coverage_stop_rate_run = if_else(cum_run_plays >= 5,
+                                    cum_run_stops / cum_run_plays,
+                                    NA_real_),
+    coverage_stop_rate_pass = if_else(cum_pass_plays >= 5,
+                                     cum_pass_stops / cum_pass_plays,
+                                     NA_real_)
+  ) %>%
+  ungroup()
+
+# Print diagnostic info for coverage tendencies
+message("\nCoverage tendencies summary:")
+print(summary(coverage_tendencies))
+message(paste("Number of NA values in coverage stop rates:",
+             sum(is.na(coverage_tendencies$coverage_stop_rate))))
+
+message("Step 2.7 completed successfully")
+
   
 message("Step 3/7: Processing third and fourth downs...")
 third_downs <- play_year %>%
@@ -604,6 +786,43 @@ fourth_downs <- play_year %>%
     ) %>%
     left_join(participation_data, 
               by = c("game_id" = "nflverse_game_id", "play_id" = "play_id"))
+
+message("Step 3.1/7: Processing initial Vegas win probabilities...")
+
+# Phase 1: Create a complete lookup table for all teams
+initial_wp_lookup <- play_year %>%
+  group_by(game_id) %>%
+  arrange(game_id, play_id) %>%
+  filter(row_number() == 1) %>%
+  select(game_id, vegas_wp, home_team, away_team, week) %>%
+  # Expand to have a row for each team in the game
+  tidyr::pivot_longer(
+    cols = c(home_team, away_team),
+    names_to = "team_type",
+    values_to = "team"
+  ) %>%
+  mutate(
+    vegas_wp_beg = if_else(team_type == "home_team", vegas_wp, 1 - vegas_wp)
+  ) %>%
+  select(game_id, week, team, vegas_wp_beg)
+
+message(sprintf("Created lookup table with %d team-game combinations", nrow(initial_wp_lookup)))
+
+# Phase 2: Simple joins to third and fourth downs
+message("\nProcessing third downs...")
+third_downs <- third_downs %>%
+  left_join(initial_wp_lookup, by = c("game_id", "week", "posteam" = "team"))
+
+message("\nProcessing fourth downs...")
+fourth_downs <- fourth_downs %>%
+  left_join(initial_wp_lookup, by = c("game_id", "week", "posteam" = "team"))
+
+# Validation
+message("\nValidation:")
+message(sprintf("Third downs - NA rate in vegas_wp_beg: %.2f%%", 
+               100 * sum(is.na(third_downs$vegas_wp_beg)) / nrow(third_downs)))
+message(sprintf("Fourth downs - NA rate in vegas_wp_beg: %.2f%%", 
+               100 * sum(is.na(fourth_downs$vegas_wp_beg)) / nrow(fourth_downs)))
 
   message("Step 3.5/7: Assigning players to positions...")
   
@@ -803,6 +1022,8 @@ assign_players_to_positions <- function(players_data, roster_data, is_offense = 
       assigned_defense_count = sum(!is.na(c_across(starts_with("defense_player_"))))
     ) %>%
     ungroup()
+  
+
 
   message("Step 4/7: Adding player information...")
   for(i in 1:11) {
@@ -827,6 +1048,9 @@ assign_players_to_positions <- function(players_data, roster_data, is_offense = 
   }
   
   message("Step 5/7: Processing team injury data...")
+  # Convert injuries_data to a standard data frame first
+  injuries_data <- as.data.frame(injuries_data)
+  
   third_downs <- third_downs %>%
     mutate(defteam = ifelse(posteam == home_team, away_team, home_team)) %>%
     left_join(run_pcts %>% 
@@ -847,90 +1071,105 @@ assign_players_to_positions <- function(players_data, roster_data, is_offense = 
                 select(posteam, game_date, prep_days),
               by = c("posteam", "game_date"))
 
-  third_downs <- third_downs %>%
-    rowwise() %>%
-    mutate(
-      offense_injuries = list(get_team_injury_counts(posteam, game_date)),
-      defense_injuries = list(get_team_injury_counts(defteam, game_date))
-    ) %>%
-    ungroup() %>%
-    unnest_wider(c(offense_injuries, defense_injuries), 
-                 names_sep = "_")
-
-  fourth_downs <- fourth_downs %>%
-    rowwise() %>%
-    mutate(
-      offense_injuries = list(get_team_injury_counts(posteam, game_date)),
-      defense_injuries = list(get_team_injury_counts(defteam, game_date))
-    ) %>%
-    ungroup() %>%
-    unnest_wider(c(offense_injuries, defense_injuries), 
-                 names_sep = "_")
-
-  third_downs <- third_downs %>%
-    group_by(posteam, game_date) %>%
-    mutate(
-      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    group_by(defteam, game_date) %>%
-    mutate(
-      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    ungroup()
-
-  fourth_downs <- fourth_downs %>%
-    group_by(posteam, game_date) %>%
-    mutate(
-      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    group_by(defteam, game_date) %>%
-    mutate(
-      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    ungroup()
-
-  all_teams_weeks <- bind_rows(
-    select(third_downs, defteam, week),
-    select(fourth_downs, defteam, week)
-  ) %>% distinct()
-
-  prev_stats <- map2_dfr(
-    all_teams_weeks$defteam,
-    all_teams_weeks$week,
-    ~{
-      prev_game <- play_year %>%
-        filter((home_team == .x | away_team == .x) & week < .y) %>%
-        arrange(desc(week)) %>%
-        slice(1) %>%
-        pull(week)
-      
-      if(length(prev_game) == 0) return(tibble(
-        defteam = .x,
-        week = .y,
-        attempts = 0,
-        successes = 0,
-        failures = 0
-      ))
-      
-      play_year %>%
-        filter(week == prev_game,
-               (home_team == .x | away_team == .x),
-               down == 4,
-               !play_type %in% c("punt", "field_goal")) %>%
-        summarize(
-          defteam = .x,
-          week = .y,
-          attempts = n(),
-          successes = sum(first_down == 1, na.rm = TRUE),
-          failures = sum(first_down == 0, na.rm = TRUE)
+  get_team_injury_counts <- function(team, game_date) {
+    game_date <- as.Date(game_date)
+    
+    team_injuries <- injuries_data %>%
+      filter(team == !!team) %>%
+      mutate(
+        injury_date = as.Date(date_modified),
+        standard_injury = case_when(
+          practice_primary_injury %in% top_injury_types ~ practice_primary_injury,
+          TRUE ~ "Other"
         )
-    })
+      )
+    
+    year_ago <- game_date - 365
+    year_injuries <- team_injuries %>%
+      filter(injury_date >= year_ago,
+             injury_date < game_date) %>%
+      count(standard_injury) %>%
+      pivot_wider(
+        names_from = standard_injury,
+        names_prefix = "injury_count_year_",
+        values_from = n,
+        values_fill = 0
+      )
+    
+    week_ago <- game_date - 7
+    week_injuries <- team_injuries %>%
+      filter(injury_date >= week_ago,
+             injury_date < game_date) %>%
+      count(standard_injury) %>%
+      pivot_wider(
+        names_from = standard_injury,
+        names_prefix = "injury_count_week_",
+        values_from = n,
+        values_fill = 0
+      )
+      
+    week_status <- team_injuries %>%
+      filter(injury_date >= week_ago,
+             injury_date < game_date) %>%
+      summarise(
+        week_questionable = sum(report_status == "Questionable", na.rm = TRUE),
+        week_doubtful = sum(report_status == "Doubtful", na.rm = TRUE),
+        week_out = sum(report_status == "Out", na.rm = TRUE),
+        week_limited_practice = sum(practice_status == "Limited Participation in Practice", na.rm = TRUE),
+        week_dnp = sum(practice_status == "Did Not Participate In Practice", na.rm = TRUE)
+      )
+    
+    bind_cols(year_injuries, week_injuries, week_status)
+  }
 
-  message("Step 5.9/7: Debugging data structures section...")
+  third_downs <- third_downs %>%
+    rowwise() %>%
+    mutate(
+      offense_injuries = list(get_team_injury_counts(posteam, game_date)),
+      defense_injuries = list(get_team_injury_counts(defteam, game_date))
+    ) %>%
+    ungroup() %>%
+    unnest_wider(c(offense_injuries, defense_injuries), 
+                 names_sep = "_")
+
+  fourth_downs <- fourth_downs %>%
+    rowwise() %>%
+    mutate(
+      offense_injuries = list(get_team_injury_counts(posteam, game_date)),
+      defense_injuries = list(get_team_injury_counts(defteam, game_date))
+    ) %>%
+    ungroup() %>%
+    unnest_wider(c(offense_injuries, defense_injuries), 
+                 names_sep = "_")
+
+  third_downs <- third_downs %>%
+    group_by(posteam, game_date) %>%
+    mutate(
+      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
+      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    group_by(defteam, game_date) %>%
+    mutate(
+      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
+      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    ungroup()
+
+  fourth_downs <- fourth_downs %>%
+    group_by(posteam, game_date) %>%
+    mutate(
+      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
+      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    group_by(defteam, game_date) %>%
+    mutate(
+      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
+      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    ungroup()
+  
+  
+
 
 
 # Add fixed down values since all third downs have down=3
@@ -939,95 +1178,257 @@ fourth_downs$down <- 4
 
 
   
-message("Step 6 Diagnostics: Checking key data structures and columns...")
+message("Step 6: Checking key data structures and creating final models...")
 
+# Print structure of all relevant datasets
+message("\nData Structure Checks:")
+message("\nthird_downs structure:")
+print(str(third_downs))
+message("\nfourth_downs structure:")
+print(str(fourth_downs))
+message("\ncoach_records structure:")
+print(str(coach_records))
+message("\ncurrent_team_records structure:")
+print(str(current_team_records))
+message("\ngame_tenure structure:")
+print(str(game_tenure))
+message("\nformation_tendencies structure:")
+print(str(formation_tendencies))
+message("\ndefense_tendencies structure:")
+print(str(defense_tendencies))
+message("\ncoverage_tendencies structure:")
+print(str(coverage_tendencies))
 
+# Debug data structures at start
+message("\nChecking initial data structures...")
+print(paste("play_year class:", paste(class(play_year), collapse = ", ")))
+print(paste("third_downs rows:", nrow(third_downs)))
+print(paste("fourth_downs rows:", nrow(fourth_downs)))
 
-  model_3rd <- third_downs %>%
-    mutate(
-      play_type_clean = case_when(
-        pass_attempt == 1 ~ "pass",
-        rush_attempt == 1 ~ "rush",
-        TRUE ~ "other"
-      )
-    ) %>%
-left_join(prev_stats, by = c("defteam", "week")) %>%
-    group_by(posteam) %>%
-    arrange(week) %>%
-    mutate(
-      down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
-      down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
-      down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
-    ) %>%
-    ungroup()
-
-  model_4th <- fourth_downs %>%
-    mutate(
-      play_type_clean = case_when(
-        pass_attempt == 1 ~ "pass",
-        rush_attempt == 1 ~ "rush",
-        TRUE ~ "other"
-      )
-    ) %>%
-    left_join(prev_stats, by = c("defteam", "week")) %>%
-    group_by(posteam) %>%
-    arrange(week) %>%
-    mutate(
-      down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
-      down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
-      down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
-    ) %>%
-    ungroup()
-
+# Convert play_year to standard data frame if needed
+play_year <- as.data.frame(play_year)
   
-  # Add before returning the models in process_year:
-  model_3rd <- model_3rd %>%
-    left_join(coach_records, by = c("posteam_coach" = "coach")) %>%
-    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam")) %>%
+# Create the base models
+message("\nCreating base models...")
+model_3rd <- third_downs %>%
+  mutate(
+    play_type_clean = case_when(
+      pass_attempt == 1 ~ "pass",
+      rush_attempt == 1 ~ "rush",
+      TRUE ~ "other"
+    )
+  ) %>%
+  group_by(posteam) %>%
+  arrange(week) %>%
+  mutate(
+    down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
+    down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
+    down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
+  ) %>%
+  ungroup()
+
+model_4th <- fourth_downs %>%
+  mutate(
+    play_type_clean = case_when(
+      pass_attempt == 1 ~ "pass",
+      rush_attempt == 1 ~ "rush",
+      TRUE ~ "other"
+    )
+  ) %>%
+  group_by(posteam) %>%
+  arrange(week) %>%
+  mutate(
+    down1_pct = zoo::na.locf(down1_pct, na.rm = FALSE),
+    down2_pct = zoo::na.locf(down2_pct, na.rm = FALSE),
+    down3_pct = zoo::na.locf(down3_pct, na.rm = FALSE)
+  ) %>%
+  ungroup()
+
+# Debug joins before processing
+message("\nChecking pre-join data structures...")
+print(paste("coach_records rows:", nrow(coach_records)))
+print(paste("current_team_records rows:", nrow(current_team_records)))
+print(paste("game_tenure rows:", nrow(game_tenure)))
+print(paste("formation_tendencies rows:", nrow(formation_tendencies)))
+print(paste("defense_tendencies rows:", nrow(defense_tendencies)))
+print(paste("coverage_tendencies rows:", nrow(coverage_tendencies)))
+
+# Process model_3rd joins
+message("\nProcessing model_3rd joins...")
+model_3rd <- tryCatch({
+  temp_model <- model_3rd %>%
+    left_join(coach_records, by = c("posteam_coach" = "coach"))
+  message("Added coach_records")
+  
+  temp_model <- temp_model %>%
+    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam"))
+  message("Added current_team_records")
+  
+  temp_model <- temp_model %>%
     left_join(game_tenure %>% 
                 select(game_id, posteam, coach, tenure_days), 
-              by = c("game_id", "posteam", "posteam_coach" = "coach")) %>%
+              by = c("game_id", "posteam", "posteam_coach" = "coach"))
+  message("Added game_tenure")
+  
+  # Formation tendencies join
+  temp_model <- temp_model %>%
     left_join(formation_tendencies %>% 
                 filter(down == 3), 
-              by = c("posteam", "down")) %>%
-    left_join(defense_tendencies %>% 
-                filter(down == 3), 
-              by = c("defteam", "down")) %>%
+              by = c("posteam", "down", "week"))
+  message("Added formation_tendencies")
+  
+  # Defense tendencies join (now includes down-specific stats)
+  temp_model <- temp_model %>%
+    left_join(defense_tendencies,
+              by = c("defteam", "week"))
+  message("Added defense_tendencies with down-specific stats")
+  
+  # Coverage tendencies join
+  temp_model <- temp_model %>%
     left_join(coverage_tendencies %>% 
                 filter(down == 3), 
-              by = c("defteam", "defense_coverage_type"))
+              by = c("defteam", "defense_coverage_type", "down", "week"))
+  message("Added coverage_tendencies")
+  
+  temp_model
+}, error = function(e) {
+  message("Error in model_3rd joins: ", e$message)
+  return(NULL)
+})
 
-  model_4th <- model_4th %>%
-    left_join(coach_records, by = c("posteam_coach" = "coach")) %>%
-    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam")) %>%
+message(paste("Final model_3rd rows:", nrow(model_3rd)))
+
+# Process model_4th joins
+message("\nProcessing model_4th joins...")
+model_4th <- tryCatch({
+  temp_model <- model_4th %>%
+    left_join(coach_records, by = c("posteam_coach" = "coach"))
+  message("Added coach_records")
+  
+  temp_model <- temp_model %>%
+    left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam"))
+  message("Added current_team_records")
+  
+  temp_model <- temp_model %>%
     left_join(game_tenure %>% 
                 select(game_id, posteam, coach, tenure_days), 
-              by = c("game_id", "posteam", "posteam_coach" = "coach")) %>%
+              by = c("game_id", "posteam", "posteam_coach" = "coach"))
+  message("Added game_tenure")
+  
+  # Formation tendencies join
+  temp_model <- temp_model %>%
     left_join(formation_tendencies %>% 
                 filter(down == 4), 
-              by = c("posteam", "down")) %>%
-    left_join(defense_tendencies %>% 
-                filter(down == 4), 
-              by = c("defteam", "down")) %>%
+              by = c("posteam", "down", "week"))
+  message("Added formation_tendencies")
+  
+  # Defense tendencies join (now includes down-specific stats)
+  temp_model <- temp_model %>%
+    left_join(defense_tendencies,
+              by = c("defteam", "week"))
+  message("Added defense_tendencies with down-specific stats")
+  
+  # Coverage tendencies join
+  temp_model <- temp_model %>%
     left_join(coverage_tendencies %>% 
                 filter(down == 4), 
-              by = c("defteam", "defense_coverage_type"))
+              by = c("defteam", "defense_coverage_type", "down", "week"))
+  message("Added coverage_tendencies")
   
-  # Add after final model joins in Step 6:
-message("Diagnosing final model duplicates...")
+  temp_model
+}, error = function(e) {
+  message("Error in model_4th joins: ", e$message)
+  return(NULL)
+})
+
+message(paste("Final model_4th rows:", nrow(model_4th)))
+
+# Check for duplicates
+message("\nChecking for duplicates...")
+model_3rd_dupes <- model_3rd %>%
+  group_by(play_id, game_id) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
 model_4th_dupes <- model_4th %>%
   group_by(play_id, game_id) %>%
-  filter(n() > 1)
+  filter(n() > 1) %>%
+  ungroup()
 
-print("Number of duplicate rows in final fourth down model:")
-print(nrow(model_4th_dupes))
-if(nrow(model_4th_dupes) > 0) {
-  print("Sample of duplicates with key columns:")
-  print(model_4th_dupes %>% 
-        select(play_id, game_id, posteam, defteam, offense_formation, defense_coverage_type) %>%
-        head())
+message("\nDuplicate summary:")
+print(paste("model_3rd duplicates:", nrow(model_3rd_dupes)))
+print(paste("model_4th duplicates:", nrow(model_4th_dupes)))
+
+if(nrow(model_3rd_dupes) > 0 || nrow(model_4th_dupes) > 0) {
+  message("\nSample of duplicates:")
+  if(nrow(model_3rd_dupes) > 0) {
+    print("Third down duplicates:")
+    print(model_3rd_dupes %>% 
+          select(play_id, game_id, posteam, defteam, offense_formation, defense_coverage_type) %>%
+          head())
+  }
+  if(nrow(model_4th_dupes) > 0) {
+    print("Fourth down duplicates:")
+    print(model_4th_dupes %>% 
+          select(play_id, game_id, posteam, defteam, offense_formation, defense_coverage_type) %>%
+          head())
+  }
 }
-  
+
+# Final validation
+message("\nFinal validation checks...")
+print(paste("model_3rd columns:", ncol(model_3rd)))
+print(paste("model_4th columns:", ncol(model_4th)))
+
+# Check for key columns
+key_columns <- c("play_id", "game_id", "posteam", "defteam", "play_type_clean")
+missing_3rd <- key_columns[!key_columns %in% names(model_3rd)]
+missing_4th <- key_columns[!key_columns %in% names(model_4th)]
+
+if(length(missing_3rd) > 0) message("Missing columns in model_3rd: ", paste(missing_3rd, collapse=", "))
+if(length(missing_4th) > 0) message("Missing columns in model_4th: ", paste(missing_4th, collapse=", "))
+
+# Check for down-specific defensive metrics
+defense_columns <- c(
+  "def_stop_rate_run", "def_stop_rate_pass",
+  "def_stop_rate_1st_run", "def_stop_rate_1st_pass",
+  "def_stop_rate_2nd_run", "def_stop_rate_2nd_pass",
+  "def_stop_rate_3rd_run", "def_stop_rate_3rd_pass",
+  "def_stop_rate_4th_run", "def_stop_rate_4th_pass"
+)
+
+message("\nChecking defense-specific columns...")
+defense_missing_3rd <- defense_columns[!defense_columns %in% names(model_3rd)]
+defense_missing_4th <- defense_columns[!defense_columns %in% names(model_4th)]
+
+if(length(defense_missing_3rd) > 0) {
+  message("Missing defense columns in model_3rd: ", paste(defense_missing_3rd, collapse=", "))
+}
+if(length(defense_missing_4th) > 0) {
+  message("Missing defense columns in model_4th: ", paste(defense_missing_4th, collapse=", "))
+}
+
+# Coverage validation
+coverage_columns <- c(
+  "defense_coverage_type",
+  "coverage_stop_rate",
+  "coverage_stop_rate_run",
+  "coverage_stop_rate_pass"
+)
+
+message("\nChecking coverage columns...")
+coverage_missing_3rd <- coverage_columns[!coverage_columns %in% names(model_3rd)]
+coverage_missing_4th <- coverage_columns[!coverage_columns %in% names(model_4th)]
+
+if(length(coverage_missing_3rd) > 0) {
+  message("Missing coverage columns in model_3rd: ", paste(coverage_missing_3rd, collapse=", "))
+}
+if(length(coverage_missing_4th) > 0) {
+  message("Missing coverage columns in model_4th: ", paste(coverage_missing_4th, collapse=", "))
+}
+
+# Return the final models
+message("\nStep 6 completed successfully")
   
   message("Step 7/7: Adding specialists...")
   specialists <- get_specialists(year)
@@ -1067,9 +1468,10 @@ if(nrow(model_4th_dupes) > 0) {
 }
 ```
 
+
 ```{r}
 # Main processing
-years <- 2016:2023
+years <- 2016#:2023
 all_data <- list()
 
 for(year in years) {
@@ -1084,7 +1486,6 @@ combined_fourth_downs <- bind_rows(
   lapply(all_data, function(x) validate_data(x$fourth_downs))
 )
 ```
-
 
 
 # filter out weeks with no info on who was on the field
