@@ -533,7 +533,6 @@ third_downs <- play_year %>%
       drive_start_transition,
       posteam_type,
       vegas_wp,
-      vegas_wpa,
       total_line,
       spread_line
     ) %>%
@@ -588,7 +587,6 @@ fourth_downs <- play_year %>%
       drive_start_transition,
       posteam_type,
       vegas_wp,
-      vegas_wpa,
       total_line,
       spread_line
     ) %>%
@@ -1071,7 +1069,7 @@ if(nrow(model_4th_dupes) > 0) {
 
 ```{r}
 # Main processing
-years <- 2017#2016:2023
+years <- 2016:2023
 all_data <- list()
 
 for(year in years) {
@@ -1412,8 +1410,8 @@ player_status <- load_rosters_weekly(seasons = 2015:2023) %>%
   ) %>%
   ungroup()
 
-# Join with team performance data
 final_player_status <- player_status %>%
+  # First join for current team wins
   left_join(
     team_rolling_wins %>% 
       select(season, week, team, wins_last_18),
@@ -1421,15 +1419,21 @@ final_player_status <- player_status %>%
   ) %>%
   group_by(player_id) %>%
   mutate(
-    # Create temp columns for team switch info
+    prev_team = lag(team),
+    team_switch = team != prev_team & !is.na(prev_team),
     temp_old_team = if_else(team_switch, prev_team, NA_character_),
-    temp_old_wins = if_else(team_switch, lag(wins_last_18), NA_real_),
-    # Carry forward these values until next switch
-    old_team = na.locf(temp_old_team, na.rm = FALSE),
-    old_team_wins = na.locf(temp_old_wins, na.rm = FALSE)
+    old_team = na.locf(temp_old_team, na.rm = FALSE)
   ) %>%
   ungroup() %>%
-  # Clean up and select final columns
+  # Second join to get old team's wins
+  left_join(
+    team_rolling_wins %>% 
+      select(season, week, team, wins_last_18),
+    by = c("season" = "season", 
+           "week" = "week",
+           "old_team" = "team"),
+    suffix = c("", "_old")
+  ) %>%
   select(
     player_id,
     season,
@@ -1439,7 +1443,7 @@ final_player_status <- player_status %>%
     team_switch,
     weeks_since_switch,
     current_team_wins = wins_last_18,
-    old_team_wins
+    old_team_wins = wins_last_18_old
   )
 ```
 
@@ -1505,6 +1509,43 @@ add_switch_info <- function(pbp_data, switch_data) {
 combined_third_downs<- add_switch_info(combined_third_downs, final_player_status)
 combined_fourth_downs <- add_switch_info(combined_fourth_downs, final_player_status)
 ```
+
+```{r}
+#kill yards_gained
+combined_third_downs <- combined_third_downs %>%
+  select(-yards_gained)
+combined_fourth_downs <- combined_fourth_downs %>%
+  select(-yards_gained)
+```
+
+```{r}
+# Function to add years since rookie for all players
+add_yrs_since_rookie <- function(df) {
+  # For each player 1-11
+  for(i in 1:11) {
+    # Offense players
+    off_rookie_col <- paste0("offense_player_", i, "_rookie_year")
+    off_yrs_since_col <- paste0("offense_player_", i, "_yrs_since_rookie")
+    
+    # Create new column with years since rookie
+    df[[off_yrs_since_col]] <- df$season - df[[off_rookie_col]]
+    
+    # Defense players
+    def_rookie_col <- paste0("defense_player_", i, "_rookie_year")
+    def_yrs_since_col <- paste0("defense_player_", i, "_yrs_since_rookie")
+    
+    # Create new column with years since rookie
+    df[[def_yrs_since_col]] <- df$season - df[[def_rookie_col]]
+  }
+  
+  return(df)
+}
+
+# Apply to both datasets
+combined_third_downs <- add_yrs_since_rookie(combined_third_downs)
+combined_fourth_downs <- add_yrs_since_rookie(combined_fourth_downs)
+```
+
 
 ```{r}
 # Save results
@@ -1620,7 +1661,6 @@ now count how many values offense_players and defense_players have in them
 
 ```{r}
 str(check_ids)
-
 ```
 
 
