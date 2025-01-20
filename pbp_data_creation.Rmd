@@ -1576,49 +1576,13 @@ return(list(
   fourth_downs = model_4th
 ))
 
-  
-  message("Step 7/7: Adding specialists...")
-  specialists <- get_specialists(year)
-
-  specialists$kickers <- specialists$kickers %>%
-    rename(
-      kicker_id = kicker_player_id,
-      kicker_name = kicker_player_name
-    ) %>%
-    filter(season == year | season == year - 1) %>%
-    arrange(desc(season), desc(week)) %>%
-    distinct(team, .keep_all = TRUE) %>%
-    select(team, kicker_id, kicker_name)
-
-  specialists$punters <- specialists$punters %>%
-    rename(
-      punter_id = punter_player_id,
-      punter_name = punter_player_name
-    ) %>%
-    filter(season == year | season == year - 1) %>%
-    arrange(desc(season), desc(week)) %>%
-    distinct(team, .keep_all = TRUE) %>%
-    select(team, punter_id, punter_name)
-
-  model_4th <- model_4th %>%
-    left_join(specialists$kickers, by = c("posteam" = "team")) %>%
-    left_join(specialists$punters, by = c("posteam" = "team"))
-
-  model_3rd <- model_3rd %>%
-    left_join(specialists$kickers, by = c("posteam" = "team")) %>%
-    left_join(specialists$punters, by = c("posteam" = "team"))
-
-  return(list(
-    third_downs = model_3rd,
-    fourth_downs = model_4th
-  ))
 }
 ```
 
 
 ```{r}
 # Main processing
-years <- 2017#:2023
+years <- 2017:2023
 all_data <- list()
 
 for(year in years) {
@@ -1633,6 +1597,96 @@ combined_fourth_downs <- bind_rows(
   lapply(all_data, function(x) validate_data(x$fourth_downs))
 )
 ```
+
+```{r}
+# After the bind_rows, add specialists data
+message("Adding specialists data...")
+
+# Function to get specialists for a year
+get_specialists <- function(year) {
+  pbp <- bind_rows(
+    load_pbp(year),
+    load_pbp(year - 1)
+  ) %>%
+  arrange(game_date, desc(play_id))
+  
+  # Get kickers, including the game date
+  kickers <- pbp %>%
+    filter(field_goal_attempt == 1 | extra_point_attempt == 1) %>%
+    select(team = posteam, week, season, game_date, 
+           kicker_player_id, kicker_player_name) %>%
+    distinct(team, week, season, .keep_all = TRUE)
+    
+  # Get punters, including the game date
+  punters <- pbp %>%
+    filter(punt_attempt == 1) %>%
+    select(team = posteam, week, season, game_date,
+           punter_player_id, punter_player_name) %>%
+    distinct(team, week, season, .keep_all = TRUE)
+    
+  list(kickers = kickers, punters = punters)
+}
+
+# Get specialists for all years
+years <- 2017:2023
+all_specialists <- lapply(years, function(year) {
+  message(sprintf("Getting specialists for year %d...", year))
+  get_specialists(year)
+})
+
+# Combine specialists data across all years
+all_kickers <- bind_rows(lapply(all_specialists, function(x) x$kickers))
+all_punters <- bind_rows(lapply(all_specialists, function(x) x$punters))
+
+# Process kickers data
+processed_kickers <- all_kickers %>%
+  arrange(desc(game_date)) %>%
+  group_by(team, season, week) %>%
+  slice(1) %>%  # Take most recent kicker for each team-week
+  ungroup() %>%
+  select(team, season, week, 
+         kicker_id = kicker_player_id, 
+         kicker_name = kicker_player_name)
+
+# Process punters data
+processed_punters <- all_punters %>%
+  arrange(desc(game_date)) %>%
+  group_by(team, season, week) %>%
+  slice(1) %>%  # Take most recent punter for each team-week
+  ungroup() %>%
+  select(team, season, week,
+         punter_id = punter_player_id,
+         punter_name = punter_player_name)
+
+# Add specialists to combined datasets
+combined_third_downs <- combined_third_downs %>%
+  left_join(processed_kickers, 
+            by = c("posteam" = "team", "season", "week")) %>%
+  left_join(processed_punters,
+            by = c("posteam" = "team", "season", "week"))
+
+combined_fourth_downs <- combined_fourth_downs %>%
+  left_join(processed_kickers,
+            by = c("posteam" = "team", "season", "week")) %>%
+  left_join(processed_punters,
+            by = c("posteam" = "team", "season", "week"))
+
+# Validate the joins
+message("\nValidating specialist data:")
+message(sprintf("Third downs - Kickers: %d unique IDs, %d NAs", 
+                length(unique(na.omit(combined_third_downs$kicker_id))),
+                sum(is.na(combined_third_downs$kicker_id))))
+message(sprintf("Third downs - Punters: %d unique IDs, %d NAs", 
+                length(unique(na.omit(combined_third_downs$punter_id))),
+                sum(is.na(combined_third_downs$punter_id))))
+message(sprintf("Fourth downs - Kickers: %d unique IDs, %d NAs", 
+                length(unique(na.omit(combined_fourth_downs$kicker_id))),
+                sum(is.na(combined_fourth_downs$kicker_id))))
+message(sprintf("Fourth downs - Punters: %d unique IDs, %d NAs", 
+                length(unique(na.omit(combined_fourth_downs$punter_id))),
+                sum(is.na(combined_fourth_downs$punter_id))))
+```
+
 
 
 # filter out weeks with no info on who was on the field
