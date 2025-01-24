@@ -980,58 +980,64 @@ process_year <- function(year) {
   
   message("Step 3.5/7: Assigning players to positions...")
   
-  # Create empty player columns for third downs
-  message("  Creating player columns for third downs...")
-  for(i in 1:11) {
+  # Position slot definitions
+  OFFENSE_SLOTS <- list(
+    QB = 1:3,              
+    BACKS = 4:7,           
+    WR = 8:13,             
+    TE = 14:16,            
+    OL = 17:24             
+  )
+  
+  DEFENSE_SLOTS <- list(
+    DL = 1:8,              
+    LB = 9:14,             
+    CB = 15:19,            
+    S = 20:23              
+  )
+  
+  # Create empty columns
+  max_off_slots <- max(unlist(OFFENSE_SLOTS))
+  max_def_slots <- max(unlist(DEFENSE_SLOTS))
+  
+  for(i in 1:max_off_slots) {
     third_downs[[paste0("offense_player_", i)]] <- NA_character_
-    third_downs[[paste0("defense_player_", i)]] <- NA_character_
+    fourth_downs[[paste0("offense_player_", i)]] <- NA_character_
   }
   
-  # Create empty player columns for fourth downs
-  message("  Creating player columns for fourth downs...")
-  for(i in 1:11) {
-    fourth_downs[[paste0("offense_player_", i)]] <- NA_character_
+  for(i in 1:max_def_slots) {
+    third_downs[[paste0("defense_player_", i)]] <- NA_character_
     fourth_downs[[paste0("defense_player_", i)]] <- NA_character_
   }
   
-  # Updated position groupings with OTHER category
   OFFENSE_POSITIONS <- list(
-    ST = c("K", "P", "LS"),
     QB = "QB",
     BACKS = c("RB", "FB"),
     WR = "WR",
     TE = "TE", 
-    OL = c("T", "G", "C", "OT", "OG"),
-    OTHER = "OTHER"  # Catchall category
+    OL = c("T", "G", "C", "OT", "OG")
   )
   
   DEFENSE_POSITIONS <- list(
-    ST = c("K", "P", "LS"),
     DL = c("DE", "DT", "NT", "DL"),
     LB = c("MLB", "ILB", "OLB", "LB"),
-    DB = c("S", "FS", "SS", "SAF", "CB", "DB"),
-    OTHER = "OTHER"  # Catchall category
+    CB = "CB",
+    S = c("S", "FS", "SS", "SAF")
   )
   
   assign_players_to_positions <- function(players_data, roster_data, is_offense = TRUE) {
-    # Initialize empty slots
-    player_slots <- rep(NA_character_, 11)
-    next_slot <- 1
+    max_slots <- if(is_offense) max(unlist(OFFENSE_SLOTS)) else max(unlist(DEFENSE_SLOTS))
+    player_slots <- rep(NA_character_, max_slots)
     
-    # Skip if empty player data
-    if(is.null(players_data) || players_data == "" || next_slot > 11) {
+    if(is.null(players_data) || players_data == "") {
       return(player_slots)
     }
     
-    # Get player ids from semicolon-separated string and count them
     player_ids <- unlist(strsplit(players_data, ";"))
-    expected_players <- length(player_ids)
-    
-    if(expected_players == 0) {
+    if(length(player_ids) == 0) {
       return(player_slots)
     }
     
-    # Get player positions from roster data
     players_info <- roster_data %>%
       filter(gsis_id %in% player_ids) %>%
       select(gsis_id, depth_chart_position)
@@ -1040,100 +1046,70 @@ process_year <- function(year) {
       return(player_slots)
     }
     
-    # Helper function to assign players of a position group
-    assign_position_group <- function(position_group) {
-      players <- players_info %>%
-        filter(depth_chart_position %in% position_group)
-      
-      if(nrow(players) > 0 && next_slot <= 11) {
-        slots_to_fill <- min(nrow(players), 12 - next_slot)
-        player_slots[next_slot:(next_slot + slots_to_fill - 1)] <<- players$gsis_id[1:slots_to_fill]
-        next_slot <<- next_slot + slots_to_fill
-      }
-    }
-    
-    # First handle special teams players
-    assign_position_group(c("K", "P", "LS"))
-    
-    # Process regular position groups
+    position_slots <- if(is_offense) OFFENSE_SLOTS else DEFENSE_SLOTS
     position_groups <- if(is_offense) OFFENSE_POSITIONS else DEFENSE_POSITIONS
-    for(group in position_groups[!names(position_groups) %in% c("OTHER", "ST")]) {
-      if(next_slot <= 11) {
-        assign_position_group(group)
-      } else {
-        break
+    
+    # Assign players by position group
+    for(pos_name in names(position_groups)) {
+      pos_players <- players_info %>%
+        filter(depth_chart_position %in% position_groups[[pos_name]]) %>%
+        pull(gsis_id)
+      
+      if(length(pos_players) > 0) {
+        slot_range <- position_slots[[pos_name]]
+        slots_to_fill <- min(length(pos_players), length(slot_range))
+        player_slots[slot_range[1:slots_to_fill]] <- pos_players[1:slots_to_fill]
       }
     }
     
-    # Fill any remaining slots with unassigned player IDs
-    if(next_slot <= 11) {
-      # Get all player IDs that haven't been assigned yet
-      assigned_ids <- player_slots[!is.na(player_slots)]
-      unassigned_ids <- setdiff(player_ids, assigned_ids)
-      
-      if(length(unassigned_ids) > 0) {
-        slots_left <- 12 - next_slot
-        ids_to_add <- min(length(unassigned_ids), slots_left)
-        player_slots[next_slot:(next_slot + ids_to_add - 1)] <- unassigned_ids[1:ids_to_add]
-      }
-    }
+    # Handle unassigned players
+    assigned_ids <- player_slots[!is.na(player_slots)]
+    unassigned_ids <- setdiff(player_ids, assigned_ids)
     
-    # Verify we've used as many players as possible
-    actual_players <- sum(!is.na(player_slots))
-    if(actual_players < min(expected_players, 11)) {
-      # If we have fewer players than expected and slots available,
-      # fill remaining slots with any unused IDs
-      unused_ids <- setdiff(player_ids, player_slots[!is.na(player_slots)])
-      remaining_slots <- which(is.na(player_slots))
-      
-      if(length(unused_ids) > 0 && length(remaining_slots) > 0) {
-        slots_to_fill <- min(length(unused_ids), length(remaining_slots))
-        player_slots[remaining_slots[1:slots_to_fill]] <- unused_ids[1:slots_to_fill]
-      }
+    if(length(unassigned_ids) > 0) {
+      empty_slots <- which(is.na(player_slots))
+      slots_to_fill <- min(length(unassigned_ids), length(empty_slots))
+      player_slots[empty_slots[1:slots_to_fill]] <- unassigned_ids[1:slots_to_fill]
     }
     
     return(player_slots)
   }
   
-  # Apply position assignments to third downs
+  # Apply to third downs
   message("  Processing third downs...")
   for(i in 1:nrow(third_downs)) {
     if(i %% 1000 == 0) message("    Processing row ", i, " of ", nrow(third_downs))
     
-    # Process offense
     if(!is.na(third_downs$offense_players[i])) {
       player_slots <- assign_players_to_positions(third_downs$offense_players[i], roster_data, TRUE)
-      for(j in 1:11) {
+      for(j in 1:length(player_slots)) {
         third_downs[[paste0("offense_player_", j)]][i] <- player_slots[j]
       }
     }
     
-    # Process defense
     if(!is.na(third_downs$defense_players[i])) {
       player_slots <- assign_players_to_positions(third_downs$defense_players[i], roster_data, FALSE)
-      for(j in 1:11) {
+      for(j in 1:length(player_slots)) {
         third_downs[[paste0("defense_player_", j)]][i] <- player_slots[j]
       }
     }
   }
   
-  # Apply position assignments to fourth downs
+  # Apply to fourth downs
   message("  Processing fourth downs...")
   for(i in 1:nrow(fourth_downs)) {
     if(i %% 1000 == 0) message("    Processing row ", i, " of ", nrow(fourth_downs))
     
-    # Process offense
     if(!is.na(fourth_downs$offense_players[i])) {
       player_slots <- assign_players_to_positions(fourth_downs$offense_players[i], roster_data, TRUE)
-      for(j in 1:11) {
+      for(j in 1:length(player_slots)) {
         fourth_downs[[paste0("offense_player_", j)]][i] <- player_slots[j]
       }
     }
     
-    # Process defense
     if(!is.na(fourth_downs$defense_players[i])) {
       player_slots <- assign_players_to_positions(fourth_downs$defense_players[i], roster_data, FALSE)
-      for(j in 1:11) {
+      for(j in 1:length(player_slots)) {
         fourth_downs[[paste0("defense_player_", j)]][i] <- player_slots[j]
       }
     }
@@ -1154,12 +1130,24 @@ process_year <- function(year) {
     ) %>%
     rowwise() %>%
     mutate(
-      assigned_offense_count = sum(!is.na(c_across(starts_with("offense_player_")))),
-      assigned_defense_count = sum(!is.na(c_across(starts_with("defense_player_"))))
+      assigned_offense_count = sum(!is.na(c_across(matches("offense_player_[0-9]+")))), 
+      assigned_defense_count = sum(!is.na(c_across(matches("defense_player_[0-9]+")))),
+      
+      # New validations for position groups
+      assigned_qb_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$QB)))),
+      assigned_backs_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$BACKS)))),
+      assigned_wr_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$WR)))),
+      assigned_te_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$TE)))),
+      assigned_ol_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$OL)))),
+      
+      assigned_dl_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$DL)))),
+      assigned_lb_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$LB)))),
+      assigned_cb_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$CB)))),
+      assigned_s_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$S))))
     ) %>%
     ungroup()
   
-  # For fourth downs
+  # For fourth downs  
   message("  Processing fourth downs...")
   fourth_downs <- fourth_downs %>%
     mutate(
@@ -1172,16 +1160,28 @@ process_year <- function(year) {
     ) %>%
     rowwise() %>%
     mutate(
-      assigned_offense_count = sum(!is.na(c_across(starts_with("offense_player_")))),
-      assigned_defense_count = sum(!is.na(c_across(starts_with("defense_player_"))))
+      assigned_offense_count = sum(!is.na(c_across(matches("offense_player_[0-9]+")))),
+      assigned_defense_count = sum(!is.na(c_across(matches("defense_player_[0-9]+")))),
+      
+      # New validations for position groups
+      assigned_qb_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$QB)))),
+      assigned_backs_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$BACKS)))),
+      assigned_wr_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$WR)))),
+      assigned_te_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$TE)))),
+      assigned_ol_count = sum(!is.na(c_across(paste0("offense_player_", OFFENSE_SLOTS$OL)))),
+      
+      assigned_dl_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$DL)))),
+      assigned_lb_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$LB)))),
+      assigned_cb_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$CB)))),
+      assigned_s_count = sum(!is.na(c_across(paste0("defense_player_", DEFENSE_SLOTS$S))))
     ) %>%
     ungroup()
   
   
   
   message("Step 4/7: Adding player information...")
-  for(i in 1:11) {
-    cat("\rProcessing player", i, "of 11")
+  for(i in 1:max(unlist(OFFENSE_SLOTS))) {
+    cat("\rProcessing offensive player", i, "of", max(unlist(OFFENSE_SLOTS)))
     third_downs <- add_player_info(third_downs, 
                                    roster_data, 
                                    paste0("offense_player_", i), 
@@ -1190,7 +1190,10 @@ process_year <- function(year) {
                                     roster_data, 
                                     paste0("offense_player_", i), 
                                     paste0("offense_player_", i))
-    
+  }
+  
+  for(i in 1:max(unlist(DEFENSE_SLOTS))) {
+    cat("\rProcessing defensive player", i, "of", max(unlist(DEFENSE_SLOTS)))
     third_downs <- add_player_info(third_downs, 
                                    roster_data, 
                                    paste0("defense_player_", i), 
@@ -1202,9 +1205,7 @@ process_year <- function(year) {
   }
   
   message("Step 5/7: Processing team injury data...")
-  # Convert injuries_data to a standard data frame first
-  injuries_data <- as.data.frame(injuries_data)
-  
+  # Process third downs team-level injuries
   third_downs <- third_downs %>%
     mutate(defteam = ifelse(posteam == home_team, away_team, home_team)) %>%
     left_join(run_pcts %>% 
@@ -1224,6 +1225,43 @@ process_year <- function(year) {
     left_join(prep_time_df %>% 
                 select(posteam, game_date, prep_days),
               by = c("posteam", "game_date"))
+  
+  # Process position-specific injury aggregations
+  third_downs <- third_downs %>%
+    group_by(posteam, game_date) %>%
+    mutate(
+      offense_qb_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$QB, "_injury_count_1yr")), na.rm = TRUE),
+      offense_backs_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$BACKS, "_injury_count_1yr")), na.rm = TRUE),
+      offense_wr_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$WR, "_injury_count_1yr")), na.rm = TRUE),
+      offense_te_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$TE, "_injury_count_1yr")), na.rm = TRUE),
+      offense_ol_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$OL, "_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    group_by(defteam, game_date) %>%
+    mutate(
+      defense_dl_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$DL, "_injury_count_1yr")), na.rm = TRUE),
+      defense_lb_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$LB, "_injury_count_1yr")), na.rm = TRUE),
+      defense_cb_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$CB, "_injury_count_1yr")), na.rm = TRUE),
+      defense_s_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$S, "_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    ungroup()
+  
+  fourth_downs <- fourth_downs %>%
+    group_by(posteam, game_date) %>%
+    mutate(
+      offense_qb_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$QB, "_injury_count_1yr")), na.rm = TRUE),
+      offense_backs_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$BACKS, "_injury_count_1yr")), na.rm = TRUE),
+      offense_wr_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$WR, "_injury_count_1yr")), na.rm = TRUE),
+      offense_te_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$TE, "_injury_count_1yr")), na.rm = TRUE),
+      offense_ol_injuries = mean(c_across(paste0("offense_player_", OFFENSE_SLOTS$OL, "_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    group_by(defteam, game_date) %>%
+    mutate(
+      defense_dl_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$DL, "_injury_count_1yr")), na.rm = TRUE),
+      defense_lb_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$LB, "_injury_count_1yr")), na.rm = TRUE),
+      defense_cb_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$CB, "_injury_count_1yr")), na.rm = TRUE),
+      defense_s_injuries = mean(c_across(paste0("defense_player_", DEFENSE_SLOTS$S, "_injury_count_1yr")), na.rm = TRUE)
+    ) %>%
+    ungroup()
   
   get_team_injury_counts <- function(team, game_date) {
     game_date <- as.Date(game_date)
@@ -1276,6 +1314,7 @@ process_year <- function(year) {
     bind_cols(year_injuries, week_injuries, week_status)
   }
   
+  # Apply team injury counts
   third_downs <- third_downs %>%
     rowwise() %>%
     mutate(
@@ -1295,34 +1334,6 @@ process_year <- function(year) {
     ungroup() %>%
     unnest_wider(c(offense_injuries, defense_injuries), 
                  names_sep = "_")
-  
-  third_downs <- third_downs %>%
-    group_by(posteam, game_date) %>%
-    mutate(
-      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    group_by(defteam, game_date) %>%
-    mutate(
-      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    ungroup()
-  
-  fourth_downs <- fourth_downs %>%
-    group_by(posteam, game_date) %>%
-    mutate(
-      offense_avg_days_since_injury = mean(c_across(matches("offense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      offense_total_recent_injuries = sum(c_across(matches("offense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    group_by(defteam, game_date) %>%
-    mutate(
-      defense_avg_days_since_injury = mean(c_across(matches("defense_player_\\d+_days_since_injury")), na.rm = TRUE),
-      defense_total_recent_injuries = sum(c_across(matches("defense_player_\\d+_injury_count_1yr")), na.rm = TRUE)
-    ) %>%
-    ungroup()
-  
-  
   
   
   
@@ -1334,8 +1345,9 @@ process_year <- function(year) {
   
   message("Step 6: Checking key data structures and creating final models...")
   
-  # Debug data structures at start
-  message("\nChecking initial data structure...")
+  message("Step 6: Checking key data structures and creating final models...")
+  
+  # Debug data structures
   print_data_summary <- function(df, name) {
     message(sprintf("\nSummary for %s:", name))
     message(sprintf("Dimensions: %d rows × %d columns", nrow(df), ncol(df)))
@@ -1347,13 +1359,12 @@ process_year <- function(year) {
   print_data_summary(third_downs, "third_downs")
   print_data_summary(fourth_downs, "fourth_downs")
   
-  # Print structure of all relevant datasets
-  message("\nValidating input data structures:")
+  # Validate input structure
   validate_input_structure <- function(df, name) {
     message(sprintf("\n%s structure:", name))
     print(str(df))
     
-    # Check for key required columns
+    # Check key required columns
     req_cols <- c("play_id", "game_id", "posteam", "defteam", "season", "week")
     missing <- req_cols[!req_cols %in% names(df)]
     if(length(missing) > 0) {
@@ -1361,7 +1372,7 @@ process_year <- function(year) {
     }
   }
   
-  # Create the base models with proper tracking
+  # Create base models with tracking
   message("\nCreating base models...")
   
   create_base_model <- function(df, model_name) {
@@ -1392,7 +1403,7 @@ process_year <- function(year) {
   model_3rd <- create_base_model(third_downs, "model_3rd")
   model_4th <- create_base_model(fourth_downs, "model_4th")
   
-  # Process joins with error handling and validation
+  # Process joins with validation
   process_joins <- function(model_df, model_name) {
     message(sprintf("\nProcessing joins for %s...", model_name))
     
@@ -1400,77 +1411,26 @@ process_year <- function(year) {
       # Coach and team record joins
       result <- model_df %>%
         left_join(coach_records, by = c("posteam_coach" = "coach")) %>%
-        {
-          message("Coach records joined")
-          .
-        } %>%
         left_join(current_team_records, by = c("posteam_coach" = "coach", "posteam")) %>%
-        {
-          message("Team records joined")
-          .
-        } %>%
         left_join(game_tenure %>% 
                     select(game_id, posteam, coach, tenure_days), 
                   by = c("game_id", "posteam", "posteam_coach" = "coach"))
-      message("Game tenure joined")
       
       # Previous season stats joins
       result <- result %>%
-        # Formation stats join
         left_join(formation_stats, by = "posteam") %>%
-        {
-          message("Formation stats joined")
-          .
-        } %>%
-        # Defensive stats join
         left_join(defensive_stats, by = "defteam") %>%
-        {
-          message("Defensive stats joined")
-          .
-        } %>%
-        # Coverage stats join - now just by defteam
         left_join(coverage_stats, by = "defteam") %>%
-        {
-          message("Coverage stats joined")
-          .
-        } %>%
-        # Run/Pass tendencies join
-        left_join(run_pass_tendencies,
-                  by = c("posteam", "down")) %>%
-        {
-          message("Run/pass tendencies joined")
-          .
-        } %>%
-        # Fourth down specific stats
+        left_join(run_pass_tendencies, by = c("posteam", "down")) %>%
         left_join(fourth_down_tendencies, by = "posteam") %>%
-        {
-          message("Fourth down tendencies joined")
-          .
-        } %>%
-        # Team performance stats
-        left_join(team_stats, by = "posteam") %>%
-        {
-          message("Team stats joined")
-          .
-        }
+        left_join(team_stats, by = "posteam")
       
-      # Current season tendencies joins
+      # Current season tendencies
       result <- result %>%
-        # Formation tendencies join
         left_join(formation_tendencies %>% 
                     filter(down == model_df$down[1]), 
                   by = c("posteam", "down", "week")) %>%
-        {
-          message("Formation tendencies joined")
-          .
-        } %>%
-        # Defense tendencies join
-        left_join(defense_tendencies,
-                  by = c("defteam", "week")) %>%
-        {
-          message("Defense tendencies joined")
-          .
-        }
+        left_join(defense_tendencies, by = c("defteam", "week"))
       
       return(result)
     }, error = function(e) {
@@ -1483,8 +1443,7 @@ process_year <- function(year) {
   model_3rd <- process_joins(model_3rd, "model_3rd")
   model_4th <- process_joins(model_4th, "model_4th")
   
-  # Check for duplicates
-  message("\nChecking for duplicates...")
+  # Check duplicates
   check_duplicates <- function(df, model_name) {
     dupes <- df %>%
       group_by(play_id, game_id) %>%
@@ -1508,39 +1467,31 @@ process_year <- function(year) {
   fourth_dupes <- check_duplicates(model_4th, "model_4th")
   
   # Final validation
-  message("\nFinal validation checks...")
-  
   validate_final_model <- function(df, model_name) {
     message(sprintf("\nValidating %s:", model_name))
     
-    # Check dimensions
+    # Check dimensions and key columns
     message(sprintf("Dimensions: %d rows × %d columns", nrow(df), ncol(df)))
     
-    # Check key columns presence
-    key_columns <- c(
-      # Basic play info
-      "play_id", "game_id", "posteam", "defteam", "play_type_clean",
-      # Previous season stats
-      "prev_total_plays", "prev_stop_rate_overall", 
-      # Coverage stats - new format
-      "prev_cover0_plays", "prev_cover1_plays",
-      # Run/Pass tendencies
-      "prev_down_run_pct", "prev_fourth_down_run_pct",
-      # Current season tendencies
-      "down1_pct", "down2_pct", "down3_pct", "down4_pct",
-      # Coach and tenure info
-      "tenure_days", "overall_wins", "team_win_pct"
-    )
-    
-    missing_cols <- key_columns[!key_columns %in% names(df)]
-    if(length(missing_cols) > 0) {
-      message("Missing key columns:", paste(missing_cols, collapse=", "))
+    # Position-specific validations
+    validate_position_slots <- function(position_type, slots) {
+      for(pos in names(slots)) {
+        col_pattern <- paste0(position_type, "_player_", slots[[pos]])
+        filled_slots <- rowSums(!is.na(df[, grep(col_pattern, names(df))]))
+        message(sprintf("%s %s slots filled (mean): %.2f", position_type, pos, mean(filled_slots)))
+      }
     }
     
-    # Check NA percentages for key numeric columns
+    message("\nOffense position slot validation:")
+    validate_position_slots("offense", OFFENSE_SLOTS)
+    
+    message("\nDefense position slot validation:")
+    validate_position_slots("defense", DEFENSE_SLOTS)
+    
+    # Check NA rates
     numeric_cols <- names(df)[sapply(df, is.numeric)]
     na_rates <- sapply(df[numeric_cols], function(x) mean(is.na(x))) * 100
-    high_na_cols <- names(na_rates)[na_rates > 20]  # Flag columns with >20% NA
+    high_na_cols <- names(na_rates)[na_rates > 20]
     
     if(length(high_na_cols) > 0) {
       message("\nColumns with high NA rates (>20%):")
@@ -1549,7 +1500,6 @@ process_year <- function(year) {
     
     return(list(
       dims = dim(df),
-      missing_cols = missing_cols,
       high_na_cols = high_na_cols
     ))
   }
@@ -1557,14 +1507,7 @@ process_year <- function(year) {
   model_3rd_validation <- validate_final_model(model_3rd, "model_3rd")
   model_4th_validation <- validate_final_model(model_4th, "model_4th")
   
-  # Final output message
-  message("\nStep 6 completed")
-  message(sprintf("Final model_3rd dimensions: %d rows × %d columns", 
-                  model_3rd_validation$dims[1], model_3rd_validation$dims[2]))
-  message(sprintf("Final model_4th dimensions: %d rows × %d columns", 
-                  model_4th_validation$dims[1], model_4th_validation$dims[2]))
-  
-  # Return the final models
+  # Return final models
   return(list(
     third_downs = model_3rd,
     fourth_downs = model_4th
@@ -2228,10 +2171,7 @@ check_ids <- check_ids %>%
     off_count = sapply(strsplit(offense_players, ";"), length),
     def_count = sapply(strsplit(defense_players, ";"), length)
   )
-#
-the 12s on def are heavily carolina
 
-THE TUSH PUSH EAGLES NEED TO DIE
 
 
 
